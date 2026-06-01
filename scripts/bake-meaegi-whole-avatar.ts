@@ -80,13 +80,13 @@ const cellWidth = 250;
 const cellHeight = 250;
 const cellOriginX = 126;
 const cellOriginY = 130;
-const sourceOriginX = 145;
-const sourceOriginY = 186;
+const sourceOriginX = 150;
+const sourceOriginY = 200;
 
 const fixedFramePlacementOffsets: Partial<Record<BakeTarget, FixedFramePlacementOffset>> = {
   'cape-balloon': {
-    dx: 4,
-    dy: 8,
+    dx: 0,
+    dy: 2,
     reason: 'single fixed offset from MeAegi frame origin into Avatar_Cape_balloon.psd cells; do not vary by action/frame or target avatar bbox',
   },
 };
@@ -113,6 +113,7 @@ const bakedCells: BakedCell[] = [
   ...cells('찌르기T1', 5, 1, 3),
   ...cells('찌르기T2', 5, 2, 3),
   ...cells('엎드리기', 5, 3, 1),
+  ...cells('엎드려 찌르기', 6, 3, 1, 1),
   ...cells('찌르기TF', 5, 4, 4),
   ...cells('날기', 5, 5, 2),
   ...cells('점프', 8, 5, 1),
@@ -127,8 +128,8 @@ const bakedCells: BakedCell[] = [
   ...cells('밧줄', 5, 13, 2),
 ];
 
-function cells(action: string, startCol: number, row: number, count: number): BakedCell[] {
-  return Array.from({ length: count }, (_, frameIndex) => ({ action, frameIndex, col: startCol + frameIndex, row }));
+function cells(action: string, startCol: number, row: number, count: number, sourceFrameStart = 0): BakedCell[] {
+  return Array.from({ length: count }, (_, index) => ({ action, frameIndex: sourceFrameStart + index, col: startCol + index, row }));
 }
 
 function parseArgs() {
@@ -660,8 +661,17 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
 
   const supportedKeys = new Set(bakedCells.map((cell) => `${cell.action}:${cell.frameIndex}`));
+  const representedDuplicateKeys = new Map<string, string>([
+    ['엎드려 찌르기:0', '엎드리기:0'],
+  ]);
+  const duplicateRepresentedFrames = [...uniqueFrames.values()]
+    .filter((frame) => representedDuplicateKeys.has(`${frame.action}:${frame.frameIndex}`))
+    .map((frame) => ({ action: frame.action, frameIndex: frame.frameIndex, representedBy: representedDuplicateKeys.get(`${frame.action}:${frame.frameIndex}`)! }));
   const skipped = [...uniqueFrames.values()]
-    .filter((frame) => !supportedKeys.has(`${frame.action}:${frame.frameIndex}`) && !frame.action.includes('눈깜빡임'))
+    .filter((frame) => {
+      const key = `${frame.action}:${frame.frameIndex}`;
+      return !supportedKeys.has(key) && !representedDuplicateKeys.has(key) && !frame.action.includes('눈깜빡임');
+    })
     .map((frame) => ({ action: frame.action, frameIndex: frame.frameIndex }));
   const report = {
     share,
@@ -673,6 +683,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     bakedFrames: bakedCells.length,
     skippedFrames: skipped.length,
     skipped,
+    duplicateRepresentedFrames,
     excludedExpressionFrames: [...uniqueFrames.values()].filter((frame) => frame.action.includes('눈깜빡임')).length,
     placement: {
       cellWidth,

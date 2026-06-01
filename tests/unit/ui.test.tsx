@@ -46,10 +46,10 @@ test('MeAegi share adapter extracts public share payloads into source parts and 
   assert.equal(imported.source, 'meaegi-share');
   assert.equal(imported.avatar.hash, 'HASH');
   assert.deepEqual(imported.parts.map((part) => part.id), ['hair', 'weapon']);
-  assert.equal(imported.diagnostics.totalPoseActionFrames, 111);
+  assert.equal(imported.diagnostics.totalPoseActionFrames, 113);
   assert.equal(imported.diagnostics.totalHiddenEmotionFrames, 0);
-  assert.equal(imported.diagnostics.totalActionFrames, 111);
-  assert.equal(imported.frames.length, 222);
+  assert.equal(imported.diagnostics.totalActionFrames, 113);
+  assert.equal(imported.frames.length, 226);
   assert.equal(imported.frames.every((frame) => frame.imageRef?.startsWith('https://open.api.nexon.com/static/maplestory/character/look/HASH?')), true);
   assert.equal(imported.frames.some((frame) => String(frame.action) === '눈깜빡임(E06)' || frame.imageRef?.includes('emotion=E06')), false);
   assert.equal(imported.diagnostics.hiddenEmotions[0].includedInDefaultImport, false);
