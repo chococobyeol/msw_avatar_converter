@@ -77,7 +77,8 @@ const hiddenEmotionFrames = [
     label: '눈깜빡임(E06)',
     emotionCode: 'E06',
     lastFrameIndex: 2,
-    note: 'MeAegi UI does not expose this emotion label, but Nexon character/look accepts E06.1 and E06.2 as distinct PNG frames.',
+    includedInDefaultImport: false,
+    note: 'MeAegi UI does not expose this emotion label, and MVP PSD bake excludes expression/blink frames to avoid unnatural fixed-loop blinking.',
   },
 ] as const;
 
@@ -103,18 +104,6 @@ function characterLookFrameUrl(hash: string, actionCode: string, frameIndex: num
     x: '90',
     y: '140',
     action: `${actionCode}.${frameIndex}`,
-  });
-  return `https://open.api.nexon.com/static/maplestory/character/look/${hash}?${params.toString()}`;
-}
-
-function characterLookEmotionFrameUrl(hash: string, emotionCode: string, frameIndex: number): string {
-  const params = new URLSearchParams({
-    width: '180',
-    height: '180',
-    x: '90',
-    y: '140',
-    action: 'A00.0',
-    emotion: `${emotionCode}.${frameIndex}`,
   });
   return `https://open.api.nexon.com/static/maplestory/character/look/${hash}?${params.toString()}`;
 }
@@ -158,20 +147,12 @@ export function buildMeaegiShareImport(share: string, avatar: MeaegiAvatarPayloa
       prism: avatar.itemPrism?.[slot] ?? null,
     }));
   const actionFrameKeys = meaegiActions.flatMap(([label, actionCode, lastFrameIndex]) => Array.from({ length: lastFrameIndex + 1 }, (_, frameIndex) => ({ label, actionCode, frameIndex })));
-  const emotionFrameKeys = hiddenEmotionFrames.flatMap(({ label, emotionCode, lastFrameIndex }) => Array.from({ length: lastFrameIndex + 1 }, (_, frameIndex) => ({ label, emotionCode, frameIndex })));
-  const actionFrames = parts.flatMap((part) => actionFrameKeys.map(({ label, actionCode, frameIndex }) => ({
+  const frames = parts.flatMap((part) => actionFrameKeys.map(({ label, actionCode, frameIndex }) => ({
     action: label,
     frameIndex,
     partId: part.id,
     imageRef: avatar.hash ? characterLookFrameUrl(avatar.hash, actionCode, frameIndex) : `${share}:${part.id}:${actionCode}:${frameIndex}`,
   })));
-  const emotionFrames = parts.flatMap((part) => emotionFrameKeys.map(({ label, emotionCode, frameIndex }) => ({
-    action: label,
-    frameIndex,
-    partId: part.id,
-    imageRef: avatar.hash ? characterLookEmotionFrameUrl(avatar.hash, emotionCode, frameIndex) : `${share}:${part.id}:${emotionCode}:${frameIndex}`,
-  })));
-  const frames = [...actionFrames, ...emotionFrames];
   const renderImageUrl = avatar.hash ? `https://open.api.nexon.com/static/maplestory/Character/${avatar.hash}.png` : null;
   return {
     source: 'meaegi-share',
@@ -182,16 +163,16 @@ export function buildMeaegiShareImport(share: string, avatar: MeaegiAvatarPayloa
     diagnostics: {
       itemSlots: parts.length,
       actions: meaegiActions.map(([label, actionCode, lastFrameIndex]) => ({ label, actionCode, frameCount: lastFrameIndex + 1 })),
-      hiddenEmotions: hiddenEmotionFrames.map(({ label, emotionCode, lastFrameIndex, note }) => ({ label, emotionCode, frameCount: lastFrameIndex + 1, note })),
+      hiddenEmotions: hiddenEmotionFrames.map(({ label, emotionCode, lastFrameIndex, includedInDefaultImport, note }) => ({ label, emotionCode, frameCount: lastFrameIndex + 1, includedInDefaultImport, note })),
       totalPartFrames: frames.length,
-      totalActionFrames: actionFrameKeys.length + emotionFrameKeys.length,
+      totalActionFrames: actionFrameKeys.length,
       totalPoseActionFrames: actionFrameKeys.length,
-      totalHiddenEmotionFrames: emotionFrameKeys.length,
+      totalHiddenEmotionFrames: 0,
       renderImageUrl,
       warnings: [
         'Part preview thumbnails use item icons; worn per-part animation isolation is not complete yet.',
         'Character animation preview uses Nexon character/look frame URLs generated from the MeAegi share hash.',
-        'Hidden blink emotion E06 is included as a separate preview track because MeAegi does not expose it in the normal UI.',
+        'Hidden blink emotion E06 is detected but excluded from default PSD bake because MSW avatar PSDs do not expose per-frame blink timing.',
         'Pixel-golden PSD parity still needs the real crop/alignment extractor and PSD writer integration.',
       ],
     },

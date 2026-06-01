@@ -14,3 +14,4 @@ dist/
 # Generated review/output bundles; source templates are tracked under avatartemplate/
 artifacts/**/roundtrip-psd/
 artifacts/tmp-review/
+artifacts/whole-avatar-bake/

@@ -36,6 +36,38 @@ interface ImportedSourceState {
   diagnostics?: ImportDiagnostics;
 }
 
+interface BakeResultFile {
+  action: string;
+  frameCount: number;
+  gif: string | null;
+  frameDir: string;
+  sourceVsConvertedDiffPixels: number;
+  sourceVsTemplateDiffPixels: number;
+}
+
+interface BakeResult {
+  report: {
+    outputPsd: string;
+    bakedFrames: number;
+    skippedFrames: number;
+    placement: Record<string, unknown>;
+    validation: {
+      frameCellDiffPixels: number;
+      frameCellMaxChannelDelta: number;
+      motionComparisonGifsGenerated: number;
+    };
+  };
+  files: {
+    psd: string;
+    report: string;
+    expectedSheet: string;
+    templateReferenceSheet: string;
+    convertedEditableSheet: string;
+    diff: string;
+    motionComparisonGifs: BakeResultFile[];
+  };
+}
+
 function frameImageRef(frames: UiFrame[], parts: UiPart[], action: string, frameIndex: number): string | undefined {
   const partIds = new Set(parts.map((part) => part.id));
   return frames.find((frame) => frame.action === action && frame.frameIndex === frameIndex && (partIds.size === 0 || partIds.has(frame.partId)))?.imageRef;
@@ -93,6 +125,8 @@ export function App() {
   const [selectedPartIds, setSelectedPartIds] = useState<Set<string>>(new Set(sampleParts.map((part) => part.id)));
   const [previewZoom, setPreviewZoom] = useState(1.15);
   const [exportStatus, setExportStatus] = useState('not exported');
+  const [bakeStatus, setBakeStatus] = useState('whole-avatar PSD not baked');
+  const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
   const grouped = useMemo(() => mappings.filter((mapping) => mapping.mode !== 'part' || mapping.groupId), [mappings]);
   const validation = useMemo(() => computeUiValidation(parts, frames, mappings), [parts, frames, mappings]);
   const sourceImageUrl = diagnostics.renderImageUrl ?? frames.find((frame) => frame.imageRef)?.imageRef;
@@ -210,6 +244,45 @@ export function App() {
     setExportStatus('review bundle manifest generated');
   };
 
+  const convertWholeAvatarPsd = async (target: 'cape' | 'longcoat') => {
+    const share = importedSource?.share ?? importJson.trim();
+    if (!share) {
+      setBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
+      return;
+    }
+    setBakeStatus(`converting whole-avatar ${target} PSD and generating motion GIF comparisons...`);
+    setBakeResult(null);
+    try {
+      const response = await fetch(`/api/bake-meaegi?share=${encodeURIComponent(share)}&target=${target}&format=json`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${response.status}`);
+      }
+      const body = await response.json() as BakeResult;
+      setBakeResult(body);
+      const bakedFrames = body.report.bakedFrames;
+      const skippedFrames = body.report.skippedFrames;
+      const frameCellDiffPixels = body.report.validation.frameCellDiffPixels;
+      const frameCellMaxDelta = body.report.validation.frameCellMaxChannelDelta;
+      const gifCount = body.report.validation.motionComparisonGifsGenerated;
+      setBakeStatus(`converted ${target}: baked=${bakedFrames}, skipped=${skippedFrames}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
+      setImportLog((current) => [
+        `GET /api/bake-meaegi target=${target} -> HTTP ${response.status}`,
+        `convertedOutput=${body.report.outputPsd}`,
+        `placement=${JSON.stringify(body.report.placement)}`,
+        `motionComparisonGifs=${gifCount} first=${body.files.motionComparisonGifs.find((artifact) => artifact.gif)?.gif ?? '-'}`,
+        `wholeAvatarBake bakedFrames=${bakedFrames} skippedFrames=${skippedFrames}`,
+        `wholeAvatarFrameValidation frameCellDiffPixels=${frameCellDiffPixels} frameCellMaxDelta=${frameCellMaxDelta}`,
+        'warning: 위치 검증은 MeAegi input / Original template / Converted PSD 3열 GIF를 보고 확인해야 합니다.',
+        ...current,
+      ]);
+    } catch (error) {
+      const message = `whole-avatar bake failed: ${(error as Error).message}`;
+      setBakeStatus(message);
+      setImportLog((current) => [message, ...current]);
+    }
+  };
+
   return (
     <main>
       <header className="hero">
@@ -260,6 +333,38 @@ export function App() {
       <section className="panel">
         <h2><FileText size={18} /> Import / Conversion Log</h2>
         <pre className="log" aria-label="import-log">{importLog.join('\n')}</pre>
+      </section>
+
+      <section className="panel">
+        <h2><Download size={18} /> Whole-avatar PSD Bake</h2>
+        <p className="muted">변환 버튼은 바로 다운로드하지 않습니다. 먼저 PSD를 만들고, MeAegi input / Original template / Converted PSD 3열 모션 GIF를 생성해서 위치를 눈으로 검증하게 합니다.</p>
+        <div className="toolbar">
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape')}>Cape 변환 + GIF 비교 생성</button>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('longcoat')}>Longcoat 변환 + GIF 비교 생성</button>
+          <span aria-label="bake-status">{bakeStatus}</span>
+        </div>
+        {bakeResult ? (
+          <div className="bake-result">
+            <div className="artifact-links">
+              <a href={bakeResult.files.psd}>완성 PSD 다운로드</a>
+              <a href={bakeResult.files.report} target="_blank" rel="noreferrer">validation-report.json</a>
+              <a href={bakeResult.files.expectedSheet} target="_blank" rel="noreferrer">MeAegi source sheet</a>
+              <a href={bakeResult.files.templateReferenceSheet} target="_blank" rel="noreferrer">Original template sheet</a>
+              <a href={bakeResult.files.convertedEditableSheet} target="_blank" rel="noreferrer">Converted PSD sheet</a>
+              <a href={bakeResult.files.diff} target="_blank" rel="noreferrer">source-vs-PSD diff</a>
+            </div>
+            <div className="comparison-gifs">
+              {bakeResult.files.motionComparisonGifs.filter((artifact) => artifact.gif).slice(0, 8).map((artifact) => (
+                <a key={artifact.action} className="gif-card" href={artifact.gif ?? '#'} target="_blank" rel="noreferrer">
+                  <strong>{artifact.action}</strong>
+                  <small>{artifact.frameCount} frames · source-vs-PSD diff {artifact.sourceVsConvertedDiffPixels}</small>
+                  <img src={artifact.gif ?? ''} alt={`${artifact.action} comparison gif`} />
+                </a>
+              ))}
+            </div>
+            <p className="muted">{bakeResult.files.motionComparisonGifs.length}개 모션 비교 GIF 생성됨. 위에는 처음 8개만 표시합니다.</p>
+          </div>
+        ) : null}
       </section>
 
       {importedSource ? (
