@@ -27,6 +27,7 @@ interface LoadedFrame {
 }
 
 type Bounds = LoadedFrame['bounds'];
+type FrameCorrection = { dx: number; dy: number; reason: string };
 
 interface ComparisonArtifact {
   action: string;
@@ -80,6 +81,14 @@ const cellOriginX = 126;
 const cellOriginY = 130;
 const sourceOriginX = 145;
 const sourceOriginY = 186;
+
+const manualFrameCorrections: Partial<Record<BakeTarget, Record<string, FrameCorrection>>> = {
+  'cape-balloon': {
+    '기본(한손):0': { dx: 18, dy: 0, reason: 'user-measured stand1 frame 0 was -18,0 from desired MSW preview position' },
+    '기본(한손):1': { dx: 21, dy: 0, reason: 'user-measured stand1 frame 1 was -21,0 from desired MSW preview position' },
+    '기본(한손):2': { dx: 21, dy: 5, reason: 'user-measured stand1 frame 2 was -21,-5 from desired MSW preview position' },
+  },
+};
 
 const bakedCells: BakedCell[] = [
   ...cells('걷기(한손)', 0, 0, 4),
@@ -189,15 +198,19 @@ function over(dst: Uint8ClampedArray, dstOffset: number, src: Uint8ClampedArray,
   dst[dstOffset + 3] = Math.round(oa * 255);
 }
 
-function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds): void {
+function correctionKey(cell: Pick<BakedCell, 'action' | 'frameIndex'>): string {
+  return `${cell.action}:${cell.frameIndex}`;
+}
+
+function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds, correction?: FrameCorrection): void {
   const cellLeft = cell.col * cellWidth;
   const cellTop = cell.row * cellHeight;
   const sourceCenterX = frame.bounds.empty ? sourceOriginX : (frame.bounds.left + frame.bounds.right) / 2;
   const sourceBottomY = frame.bounds.empty ? sourceOriginY : frame.bounds.bottom;
   const targetCenterX = guideBounds && !guideBounds.empty ? (guideBounds.left + guideBounds.right) / 2 : cellOriginX;
   const targetBottomY = guideBounds && !guideBounds.empty ? guideBounds.bottom : cellOriginY;
-  const destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX);
-  const destTop = Math.round(cellTop + targetBottomY - sourceBottomY);
+  const destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX + (correction?.dx ?? 0));
+  const destTop = Math.round(cellTop + targetBottomY - sourceBottomY + (correction?.dy ?? 0));
   for (let y = 0; y < frame.height; y += 1) {
     const ty = destTop + y;
     if (ty < 0 || ty >= sheetHeight) continue;
@@ -535,9 +548,11 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateReferenceSheet = renderTemplateReferenceSheet(psd);
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
+  const targetManualCorrections = manualFrameCorrections[target] ?? {};
   const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
   for (const cell of bakedCells) {
-    drawFrame(sheet, psd.width, psd.height, frameByKey.get(`${cell.action}:${cell.frameIndex}`)!, cell, guideBoundsByCell.get(`${cell.action}:${cell.frameIndex}`));
+    const key = correctionKey(cell);
+    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, cell, guideBoundsByCell.get(key), targetManualCorrections[key]);
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
   if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
@@ -590,6 +605,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       anchor: 'per-frame-template-guide-character-bounds-center-bottom',
       zmapPresetRemoved: config.removeZmapPreset,
       targetLayerPromotedToTop: config.promoteTargetLayerToTop,
+      manualFrameCorrections: Object.entries(targetManualCorrections).map(([key, correction]) => ({ key, ...correction })),
     },
     validation: {
       readbackLayerExactMatch: frameValidation.pass,
