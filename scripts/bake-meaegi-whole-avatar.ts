@@ -46,6 +46,15 @@ const targetConfigs = {
     editLayerPath: 'edithere:cape_capeOverHead_10',
     expandTargetLayerToCanvas: true,
     promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
+  },
+  'cape-balloon': {
+    templatePath: 'avatartemplate/Avatar_Cape_balloon.psd',
+    outputName: 'Avatar_Cape_balloon.psd',
+    editLayerPath: 'edithere:cape_capeOverHead_10',
+    expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
   },
   longcoat: {
     templatePath: 'avatartemplate/Avatar_Longcoat.psd',
@@ -53,6 +62,7 @@ const targetConfigs = {
     editLayerPath: 'edithere:mailArm_mailArmOverHair_22',
     expandTargetLayerToCanvas: true,
     promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
   },
 } as const;
 
@@ -120,7 +130,7 @@ function parseArgs() {
   }
   const share = extractMeaegiShareId(args.get('share') ?? args.get('url') ?? 'https://meaegi.com/dressing-room?share=5gcTvkPmcFn5');
   const target = (args.get('target') ?? 'cape') as BakeTarget;
-  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape or longcoat.`);
+  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape, cape-balloon, or longcoat.`);
   return {
     share,
     target,
@@ -223,6 +233,19 @@ function promoteLayerToTop(psd: Psd, layerPath: string): void {
   if (index <= 0) return;
   const [layer] = psd.children.splice(index, 1);
   psd.children.unshift(layer);
+}
+
+function removeZmapPresetLayers(layers: Layer[] | undefined): Layer[] | undefined {
+  if (!layers) return layers;
+  return layers
+    .filter((layer) => {
+      const name = layer.name ?? '';
+      return !name.includes('data:use_zmap_preset') && !name.includes('zmap_preset');
+    })
+    .map((layer) => {
+      layer.children = removeZmapPresetLayers(layer.children);
+      return layer;
+    });
 }
 
 function cropSheet(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, left: number, top: number, width: number, height: number): Uint8ClampedArray {
@@ -488,7 +511,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   ensureCanvasInitialized();
   const share = extractMeaegiShareId(input.share);
   const target = input.target ?? 'cape';
-  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape or longcoat.`);
+  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape, cape-balloon, or longcoat.`);
   const outDir = input.outDir ?? path.join('artifacts/whole-avatar-bake', share, target);
   const config = targetConfigs[target];
   const imported = await loadMeaegiImport(share);
@@ -517,6 +540,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     drawFrame(sheet, psd.width, psd.height, frameByKey.get(`${cell.action}:${cell.frameIndex}`)!, cell, guideBoundsByCell.get(`${cell.action}:${cell.frameIndex}`));
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
+  if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
   if (config.promoteTargetLayerToTop) promoteLayerToTop(psd, config.editLayerPath);
   mkdirSync(outDir, { recursive: true });
   const psdPath = path.join(outDir, config.outputName);
@@ -564,6 +588,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       fallbackSourceOriginX: sourceOriginX,
       fallbackSourceOriginY: sourceOriginY,
       anchor: 'per-frame-template-guide-character-bounds-center-bottom',
+      zmapPresetRemoved: config.removeZmapPreset,
+      targetLayerPromotedToTop: config.promoteTargetLayerToTop,
     },
     validation: {
       readbackLayerExactMatch: frameValidation.pass,

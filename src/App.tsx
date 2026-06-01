@@ -3,6 +3,7 @@ import { CheckCircle2, Download, Eye, FileText, Layers, Wand2, XCircle } from 'l
 import { computeUiValidation, defaultTargetForSourcePart, sampleFrames, sampleParts, targetParts, type UiFrame, type UiMappingInput, type UiPart } from './sample.js';
 
 type MappingMode = 'part' | 'group' | 'whole-avatar';
+type WholeAvatarBakeTarget = 'cape' | 'cape-balloon' | 'longcoat';
 
 interface UiMapping extends UiMappingInput {
   partId: string;
@@ -245,7 +246,7 @@ export function App() {
     setExportStatus('review bundle manifest generated');
   };
 
-  const convertWholeAvatarPsd = async (target: 'cape' | 'longcoat') => {
+  const convertWholeAvatarPsd = async (target: WholeAvatarBakeTarget) => {
     const share = importedSource?.share ?? importJson.trim();
     if (!share) {
       setBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
@@ -341,6 +342,7 @@ export function App() {
         <p className="muted">변환 버튼은 바로 다운로드하지 않습니다. 먼저 PSD를 만들고, MeAegi input / Original template / Converted PSD 3열 모션 GIF를 생성해서 위치를 눈으로 검증하게 합니다.</p>
         <div className="toolbar">
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape')}>Cape 변환 + GIF 비교 생성</button>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape-balloon')}>Cape Balloon 변환 + GIF 비교 생성</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('longcoat')}>Longcoat 변환 + GIF 비교 생성</button>
           <span aria-label="bake-status">{bakeStatus}</span>
         </div>
