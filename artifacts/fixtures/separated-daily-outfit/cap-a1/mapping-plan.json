@@ -1,0 +1,22 @@
+{
+  "mappings": [
+    {
+      "id": "cap-to-cap-a1",
+      "sourcePartIds": [
+        "cap"
+      ],
+      "targetPartId": "cap-a1",
+      "mode": "part",
+      "userConfirmedAt": "2026-06-01T00:00:00.000Z",
+      "placement": {
+        "anchor": {
+          "x": 0,
+          "y": 0,
+          "origin": "top-left"
+        },
+        "offsetX": 14,
+        "offsetY": 10
+      }
+    }
+  ]
+}

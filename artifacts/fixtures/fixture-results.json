@@ -1,0 +1,237 @@
+{
+  "generatedAt": "2026-06-01T11:30:20.525Z",
+  "policy": {
+    "kind": "exact-rgba",
+    "diffPixels": 0,
+    "maxChannelDelta": 0
+  },
+  "results": [
+    {
+      "id": "separated-daily-outfit",
+      "label": "Separated daily outfit",
+      "purpose": "Ordinary MeAegi-style cody with independently mapped clothing/hair/cap parts.",
+      "sourceParts": 5,
+      "sourceFrames": 70,
+      "actions": [
+        "stand",
+        "walk",
+        "jump",
+        "attack",
+        "prone",
+        "ladder",
+        "rope"
+      ],
+      "framesPerAction": 2,
+      "mappings": [
+        {
+          "id": "hair-to-hair",
+          "targetPartId": "hair",
+          "mode": "part",
+          "sourcePartIds": [
+            "hair"
+          ]
+        },
+        {
+          "id": "cap-to-cap-a1",
+          "targetPartId": "cap-a1",
+          "mode": "part",
+          "sourcePartIds": [
+            "cap"
+          ]
+        },
+        {
+          "id": "top-to-longcoat",
+          "targetPartId": "longcoat",
+          "mode": "part",
+          "sourcePartIds": [
+            "top"
+          ]
+        },
+        {
+          "id": "pants-to-pants",
+          "targetPartId": "pants",
+          "mode": "part",
+          "sourcePartIds": [
+            "pants"
+          ]
+        },
+        {
+          "id": "shoes-to-shoes",
+          "targetPartId": "shoes",
+          "mode": "part",
+          "sourcePartIds": [
+            "shoes"
+          ]
+        }
+      ],
+      "pass": true,
+      "diffPixels": 0,
+      "maxChannelDelta": 0,
+      "exportedTargets": [
+        "hair:psd-target-slot-fixture",
+        "cap-a1:psd-target-slot-fixture",
+        "longcoat:large-template-validated-no-psd-artifact",
+        "pants:large-template-validated-no-psd-artifact",
+        "shoes:large-template-validated-no-psd-artifact"
+      ]
+    },
+    {
+      "id": "weapon-as-gloves",
+      "label": "Weapon/shield remapped to gloves",
+      "purpose": "Unsupported source parts are user-mapped into an available MSW part.",
+      "sourceParts": 3,
+      "sourceFrames": 42,
+      "actions": [
+        "stand",
+        "walk",
+        "jump",
+        "attack",
+        "prone",
+        "ladder",
+        "rope"
+      ],
+      "framesPerAction": 2,
+      "mappings": [
+        {
+          "id": "weapon-bundle-to-gloves",
+          "targetPartId": "gloves",
+          "mode": "group",
+          "sourcePartIds": [
+            "weapon",
+            "shield",
+            "hand-fx"
+          ]
+        }
+      ],
+      "pass": true,
+      "diffPixels": 0,
+      "maxChannelDelta": 0,
+      "exportedTargets": [
+        "gloves:large-template-validated-no-psd-artifact"
+      ]
+    },
+    {
+      "id": "cape-effect-group",
+      "label": "Multi-source cape effect group",
+      "purpose": "Several source effect layers are bundled into one cape PSD target.",
+      "sourceParts": 3,
+      "sourceFrames": 42,
+      "actions": [
+        "stand",
+        "walk",
+        "jump",
+        "attack",
+        "prone",
+        "ladder",
+        "rope"
+      ],
+      "framesPerAction": 2,
+      "mappings": [
+        {
+          "id": "cape-effects-to-cape",
+          "targetPartId": "cape",
+          "mode": "group",
+          "sourcePartIds": [
+            "cape",
+            "sparkle",
+            "back-aura"
+          ]
+        }
+      ],
+      "pass": true,
+      "diffPixels": 0,
+      "maxChannelDelta": 0,
+      "exportedTargets": [
+        "cape:large-template-validated-no-psd-artifact"
+      ]
+    },
+    {
+      "id": "whole-avatar-longcoat",
+      "label": "Whole avatar baked into longcoat",
+      "purpose": "All visible source parts are collapsed into one target part for single-piece animation.",
+      "sourceParts": 5,
+      "sourceFrames": 70,
+      "actions": [
+        "stand",
+        "walk",
+        "jump",
+        "attack",
+        "prone",
+        "ladder",
+        "rope"
+      ],
+      "framesPerAction": 2,
+      "mappings": [
+        {
+          "id": "all-source-to-longcoat",
+          "targetPartId": "longcoat",
+          "mode": "whole-avatar",
+          "sourcePartIds": [
+            "body",
+            "hair",
+            "face-proxy",
+            "weapon",
+            "cape"
+          ]
+        }
+      ],
+      "pass": true,
+      "diffPixels": 0,
+      "maxChannelDelta": 0,
+      "exportedTargets": [
+        "longcoat:large-template-validated-no-psd-artifact"
+      ]
+    },
+    {
+      "id": "alpha-edge-accessory",
+      "label": "Transparent accessory and balloon cape",
+      "purpose": "Alpha preservation fixture for semi-transparent accessory pixels.",
+      "sourceParts": 3,
+      "sourceFrames": 42,
+      "actions": [
+        "stand",
+        "walk",
+        "jump",
+        "attack",
+        "prone",
+        "ladder",
+        "rope"
+      ],
+      "framesPerAction": 2,
+      "mappings": [
+        {
+          "id": "accessory-to-cap-ani",
+          "targetPartId": "cap-ani",
+          "mode": "part",
+          "sourcePartIds": [
+            "accessory"
+          ]
+        },
+        {
+          "id": "balloon-to-cape-balloon",
+          "targetPartId": "cape-balloon",
+          "mode": "part",
+          "sourcePartIds": [
+            "balloon"
+          ]
+        },
+        {
+          "id": "hair-to-hair",
+          "targetPartId": "hair",
+          "mode": "part",
+          "sourcePartIds": [
+            "hair"
+          ]
+        }
+      ],
+      "pass": true,
+      "diffPixels": 0,
+      "maxChannelDelta": 0,
+      "exportedTargets": [
+        "cap-ani:psd-target-slot-fixture",
+        "cape-balloon:large-template-validated-no-psd-artifact",
+        "hair:psd-target-slot-fixture"
+      ]
+    }
+  ]
+}

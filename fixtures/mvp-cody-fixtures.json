@@ -1,0 +1,58 @@
+{
+  "actions": ["stand", "walk", "jump", "attack", "prone", "ladder", "rope"],
+  "framesPerAction": 2,
+  "fixtures": [
+    {
+      "id": "separated-daily-outfit",
+      "label": "Separated daily outfit",
+      "purpose": "Ordinary MeAegi-style cody with independently mapped clothing/hair/cap parts.",
+      "parts": ["hair", "cap", "top", "pants", "shoes"],
+      "mappings": [
+        { "id": "hair-to-hair", "sourcePartIds": ["hair"], "targetPartId": "hair", "mode": "part" },
+        { "id": "cap-to-cap-a1", "sourcePartIds": ["cap"], "targetPartId": "cap-a1", "mode": "part" },
+        { "id": "top-to-longcoat", "sourcePartIds": ["top"], "targetPartId": "longcoat", "mode": "part" },
+        { "id": "pants-to-pants", "sourcePartIds": ["pants"], "targetPartId": "pants", "mode": "part" },
+        { "id": "shoes-to-shoes", "sourcePartIds": ["shoes"], "targetPartId": "shoes", "mode": "part" }
+      ]
+    },
+    {
+      "id": "weapon-as-gloves",
+      "label": "Weapon/shield remapped to gloves",
+      "purpose": "Unsupported source parts are user-mapped into an available MSW part.",
+      "parts": ["weapon", "shield", "hand-fx"],
+      "mappings": [
+        { "id": "weapon-bundle-to-gloves", "sourcePartIds": ["weapon", "shield", "hand-fx"], "targetPartId": "gloves", "mode": "group" }
+      ]
+    },
+    {
+      "id": "cape-effect-group",
+      "label": "Multi-source cape effect group",
+      "purpose": "Several source effect layers are bundled into one cape PSD target.",
+      "parts": ["cape", "sparkle", "back-aura"],
+      "mappings": [
+        { "id": "cape-effects-to-cape", "sourcePartIds": ["cape", "sparkle", "back-aura"], "targetPartId": "cape", "mode": "group" }
+      ]
+    },
+    {
+      "id": "whole-avatar-longcoat",
+      "label": "Whole avatar baked into longcoat",
+      "purpose": "All visible source parts are collapsed into one target part for single-piece animation.",
+      "parts": ["body", "hair", "face-proxy", "weapon", "cape"],
+      "mappings": [
+        { "id": "all-source-to-longcoat", "sourcePartIds": ["body", "hair", "face-proxy", "weapon", "cape"], "targetPartId": "longcoat", "mode": "whole-avatar" }
+      ]
+    },
+    {
+      "id": "alpha-edge-accessory",
+      "label": "Transparent accessory and balloon cape",
+      "purpose": "Alpha preservation fixture for semi-transparent accessory pixels.",
+      "parts": ["accessory", "balloon", "hair"],
+      "alphaVariant": true,
+      "mappings": [
+        { "id": "accessory-to-cap-ani", "sourcePartIds": ["accessory"], "targetPartId": "cap-ani", "mode": "part" },
+        { "id": "balloon-to-cape-balloon", "sourcePartIds": ["balloon"], "targetPartId": "cape-balloon", "mode": "part" },
+        { "id": "hair-to-hair", "sourcePartIds": ["hair"], "targetPartId": "hair", "mode": "part" }
+      ]
+    }
+  ]
+}

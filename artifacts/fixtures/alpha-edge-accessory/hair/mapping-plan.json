@@ -1,0 +1,22 @@
+{
+  "mappings": [
+    {
+      "id": "hair-to-hair",
+      "sourcePartIds": [
+        "hair"
+      ],
+      "targetPartId": "hair",
+      "mode": "part",
+      "userConfirmedAt": "2026-06-01T00:00:00.000Z",
+      "placement": {
+        "anchor": {
+          "x": 0,
+          "y": 0,
+          "origin": "top-left"
+        },
+        "offsetX": 24,
+        "offsetY": 16
+      }
+    }
+  ]
+}

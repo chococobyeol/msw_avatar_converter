@@ -1,0 +1,8 @@
+{
+  "defaultPolicy": "exact-rgba",
+  "tolerance": {
+    "diffPixels": 0,
+    "maxChannelDelta": 0
+  },
+  "notes": "Any non-zero tolerance must be justified by a fixture-specific evidence record before acceptance."
+}

@@ -1,0 +1,34 @@
+# Deep Interview Context Snapshot: msw-avatar-converter
+
+- Timestamp (UTC): 2026-06-01T05:19:08Z
+- Task statement: Build a web UI system that converts MapleStory main-server avatar/cody data into MapleStory Worlds-uploadable avatar PSD files based on local `avatartemplate` PSDs.
+- Desired outcome: MVP supports loading a cody from MeAegi shared cody or composing through a separate UI using Nexon API data, previewing per-part animations and converted output animations, and exporting MSW-compatible PSD files.
+- Stated solution: Use the MSW avatar template PSDs in `avatartemplate/` and modify avatar pixels/layers to map unavailable main-server parts (face, skin, weapon, shield, etc.) into MSW-supported template parts such as gloves/cape/longcoat.
+- Probable intent hypothesis: Reduce manual pixel editing for MSW avatar creators and enable conversion from existing MapleStory fashion coordinates into upload-ready MSW PSDs, while keeping room for future image-to-pixel-avatar generation.
+- Known local facts/evidence:
+  - Repository currently contains `.omx/` plus `avatartemplate/` only; no app source files or package manifest observed at depth 3.
+  - `avatartemplate/` contains 17 PSDs: Cap A1/A2/Ani/B/C1/C2/D/E/F/G, Cape, Cape_balloon, Gloves, Hair, Longcoat, Pants, Shoes.
+  - PSD metadata from `file`: cap/hair templates are 300x180 RGB; cape/gloves/longcoat/pants/shoes templates are 2750x3500 RGB.
+- Constraints:
+  - Deep-interview mode only: no direct implementation in this phase.
+  - Need official/reference verification before architecture handoff for MSW PSD format, Nexon Open API capabilities/terms, and MeAegi integration feasibility.
+  - MVP scope is intentionally broad; must avoid silent scope cuts without user decision.
+- Unknowns/open questions:
+  - Which input source is primary for MVP if only one path can be robust first: MeAegi shared cody import vs Nexon API composer.
+  - Exact acceptance definition of “MSW uploadable PSD”: layer names, canvas layout, frame positions, required part template files, export validation method.
+  - Whether web UI must be local-only, server-hosted, or both.
+  - Whether PSD editing must preserve original layer structure or only output pixel-equivalent PSDs accepted by MSW.
+  - Legal/ToS/copyright boundaries around using MapleStory item art, MeAegi data, and user-provided images; user later clarified all image inputs are allowed for conversion use because PSDs are manually reviewed before upload.
+  - Required animation actions/poses and target preview fidelity.
+- Decision-boundary unknowns:
+  - Whether OMX may choose the tech stack and libraries.
+  - Whether OMX may use unofficial MeAegi scraping/reverse engineering if no API exists.
+  - Whether OMX may defer one of the two input paths, AI image-to-avatar expansion, or full validation automation.
+- Likely codebase touchpoints:
+  - New web app scaffold.
+  - PSD parsing/writing pipeline.
+  - Avatar template analyzer and mapping layer.
+  - MapleStory/Nexon data adapter(s).
+  - Animation preview renderer.
+  - Export/validation pipeline.
+- Prompt-safe initial-context summary status: not_needed

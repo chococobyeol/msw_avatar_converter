@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "createdAt": "2026-06-01T05:56:54.091Z",
+  "updatedAt": "2026-06-01T08:37:22.101Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-g0-psd-roundtrip-gate",
+      "title": "G0 PSD roundtrip gate",
+      "objective": "Implement minimal scaffold and G0 PSD inventory/roundtrip evidence for all 17 templates; choose or block on PSD backend before product expansion.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T06:04:56.211Z",
+      "startedAt": "2026-06-01T05:56:59.376Z",
+      "completedAt": "2026-06-01T06:04:56.211Z",
+      "evidence": "G0 passed with ag-psd. Added minimal TypeScript scaffold, PSD inventory/roundtrip scripts, validation docs, exact policy, manual checklist, and unit tests. Evidence: npm run typecheck passed; npm run psd:inventory inventoried 17 PSDs; npm run psd:roundtrip pass=true for 17 templates with total composite diff pixels=0; npm run test:unit passed 2 tests; artifacts in artifacts/g0/."
+    },
+    {
+      "id": "G002-canonical-contracts-and-adapters",
+      "title": "Canonical contracts and adapters",
+      "objective": "Implement SourceAsset/SourceFrameSet/NormalizedFrameSet canonical contracts plus thin image/MeAegi source adapter boundaries and template adapter interface.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T06:06:41.138Z",
+      "startedAt": "2026-06-01T06:04:56.797Z",
+      "completedAt": "2026-06-01T06:06:41.138Z",
+      "evidence": "Implemented canonical TypeScript contracts and thin adapters: packages/core SourceAsset/SourceFrameSet/NormalizedFrameSet/CanonicalFrame/MappingPlan/ValidationPolicy, normalization and export mapping guards; packages/source-adapters ImageUploadAdapter/PublicMeAegiAdapter emit generic SourceFrameSet only; packages/template-adapters PSD reader interface and ag-psd manifest-to-target mapping. Verification: npm run typecheck passed; npm run test:unit passed 5 tests."
+    },
+    {
+      "id": "G003-core-render-validation-export-pipeli",
+      "title": "Core render validation export pipeline",
+      "objective": "Implement deterministic normalization, mapping/grouping/whole-avatar conversion planning, preview buffers, pixel diff validation, PSD export, and manual review bundle generation.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T06:09:37.433Z",
+      "startedAt": "2026-06-01T06:06:41.648Z",
+      "completedAt": "2026-06-01T06:09:37.433Z",
+      "evidence": "Implemented core render/validation/export pipeline: alpha compositing and mapping preview in packages/render, exact RGBA pixel diff in packages/validation, PNG writer and review bundle PSD/sidecar export in packages/export. Review bundle includes PSD, mapping-plan.json, validation-report.json, validation-policy.json, preview PNGs, template inventory ref, manual checklist, and human-signoff.json. Verification: npm run typecheck passed; npm run test:unit passed 7 tests including review bundle export."
+    },
+    {
+      "id": "G004-local-web-ui-mvp",
+      "title": "Local web UI MVP",
+      "objective": "Implement import, all-part user mapping, grouping, all-animation previews, diff report, and export review bundle UI.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T06:14:19.617Z",
+      "startedAt": "2026-06-01T06:09:40.133Z",
+      "completedAt": "2026-06-01T06:14:19.617Z",
+      "evidence": "Implemented local Vite/React UI MVP with import panel, every-source-part target mapping selectors, part/group/whole-avatar modes, grouped mapping indicator, source/converted animation previews, exact RGBA diff status, and export gating until all parts are confirmed. Verification passed: npm run typecheck; npm run test:unit (8/8 incl UI); npm run build."
+    },
+    {
+      "id": "G005-fixtures-and-docs",
+      "title": "Fixtures and docs",
+      "objective": "Select representative MVP cody fixtures, document validation environment, validation policy, manual review/upload checklist, and show fixture results.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T06:18:12.309Z",
+      "startedAt": "2026-06-01T06:14:20.383Z",
+      "completedAt": "2026-06-01T06:18:12.309Z",
+      "evidence": "Selected 5 representative MVP cody fixtures and implemented deterministic fixture validation. Added fixtures/mvp-cody-fixtures.json, scripts/validate-fixtures.ts, docs/fixture-results.md, docs/source-and-api-boundaries.md, updated fixture set/validation/manual review docs. Fixture run validates separated parts, weapon-to-gloves, grouped cape, whole-avatar-to-longcoat, and alpha accessory cases over 7 actions x 2 frames with exact RGBA diff 0. Verification passed: npm run typecheck; npm run fixtures:validate (5 fixtures pass=true); npm run test:unit (8/8)."
+    },
+    {
+      "id": "G006-final-verification-and-review-gate",
+      "title": "Final verification and review gate",
+      "objective": "Run required tests, ai-slop-cleaner, independent code review, and checkpoint final quality gate.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-06-01T05:56:54.091Z",
+      "updatedAt": "2026-06-01T08:37:22.101Z",
+      "startedAt": "2026-06-01T06:18:12.998Z",
+      "evidence": "Final quality gate passed: ai-slop-cleaner report updated; npm run typecheck; npm run test:unit 22/22; npm run psd:roundtrip 17 templates; npm run fixtures:validate 5 fixtures; npm run build; npm audit --audit-level=high 0 vulnerabilities; independent code-reviewer APPROVE and architect CLEAR.",
+      "completedAt": "2026-06-01T08:37:22.101Z"
+    }
+  ],
+  "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail."
+}

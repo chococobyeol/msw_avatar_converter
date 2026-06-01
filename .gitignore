@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+
+# OMX runtime/private session state
+.omx/logs/
+.omx/state/
+.omx/metrics.json
+.omx/ultragoal/codex-goal-active.json
+
+# Generated review/output bundles; source templates are tracked under avatartemplate/
+artifacts/**/roundtrip-psd/
+artifacts/tmp-review/

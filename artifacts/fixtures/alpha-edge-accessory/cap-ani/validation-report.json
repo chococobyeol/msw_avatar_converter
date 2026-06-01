@@ -1,0 +1,66 @@
+{
+  "jobId": "alpha-edge-accessory",
+  "policy": {
+    "kind": "exact-rgba",
+    "diffPixels": 0,
+    "maxChannelDelta": 0
+  },
+  "pass": true,
+  "frames": [
+    {
+      "action": "template-slot",
+      "frameIndex": 0,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-0.png"
+    },
+    {
+      "action": "template-slot",
+      "frameIndex": 1,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-1.png"
+    },
+    {
+      "action": "template-slot",
+      "frameIndex": 2,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-2.png"
+    },
+    {
+      "action": "template-slot",
+      "frameIndex": 3,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-3.png"
+    },
+    {
+      "action": "template-slot",
+      "frameIndex": 4,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-4.png"
+    },
+    {
+      "action": "template-slot",
+      "frameIndex": 5,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/dGVtcGxhdGUtc2xvdA-5.png"
+    }
+  ],
+  "editableLayersWritten": 6
+}

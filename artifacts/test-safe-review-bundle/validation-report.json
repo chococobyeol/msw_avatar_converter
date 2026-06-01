@@ -1,0 +1,101 @@
+{
+  "policy": {
+    "kind": "exact-rgba",
+    "diffPixels": 0,
+    "maxChannelDelta": 0
+  },
+  "pass": true,
+  "frames": [
+    {
+      "action": "../../escape",
+      "frameIndex": 0,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-0.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 1,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-1.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 2,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-2.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 3,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-3.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 4,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-4.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 5,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-5.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 6,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-6.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 7,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-7.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 8,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-8.png"
+    },
+    {
+      "action": "../../escape",
+      "frameIndex": 9,
+      "pass": true,
+      "diffPixels": 0,
+      "diffRatio": 0,
+      "maxChannelDelta": 0,
+      "diffImagePath": "diff/Li4vLi4vZXNjYXBl-9.png"
+    }
+  ],
+  "editableLayersWritten": 10
+}

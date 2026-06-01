@@ -1,0 +1,22 @@
+{
+  "mappings": [
+    {
+      "id": "m",
+      "sourcePartIds": [
+        "part"
+      ],
+      "targetPartId": "hair",
+      "mode": "part",
+      "userConfirmedAt": "2026-06-01T11:29:40.158Z",
+      "placement": {
+        "anchor": {
+          "x": 0,
+          "y": 0,
+          "origin": "top-left"
+        },
+        "offsetX": 0,
+        "offsetY": 0
+      }
+    }
+  ]
+}
