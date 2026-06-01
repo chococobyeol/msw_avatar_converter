@@ -83,11 +83,21 @@ const cellOriginY = 130;
 const sourceOriginX = 150;
 const sourceOriginY = 200;
 
-const fixedFramePlacementOffsets: Partial<Record<BakeTarget, FixedFramePlacementOffset>> = {
+const fixedFramePlacementOffsets: Record<BakeTarget, FixedFramePlacementOffset> = {
+  cape: {
+    dx: 0,
+    dy: 2,
+    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Cape.psd cells; do not use target-frame bbox fitting',
+  },
   'cape-balloon': {
     dx: 0,
     dy: 2,
-    reason: 'single fixed offset from MeAegi frame origin into Avatar_Cape_balloon.psd cells; do not vary by action/frame or target avatar bbox',
+    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Cape_balloon.psd cells; do not use target-frame bbox fitting',
+  },
+  longcoat: {
+    dx: 0,
+    dy: 2,
+    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Longcoat.psd cells; do not use target-frame bbox fitting',
   },
 };
 
@@ -626,7 +636,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
   const targetFixedOffset = fixedFramePlacementOffsets[target];
-  const hasFixedFramePlacement = Boolean(targetFixedOffset);
+  const hasFixedFramePlacement = true;
   const targetManualCorrections = manualFrameCorrections[target] ?? {};
   const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
   for (const cell of bakedCells) {
