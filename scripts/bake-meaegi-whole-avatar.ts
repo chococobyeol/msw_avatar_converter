@@ -28,6 +28,12 @@ interface LoadedFrame {
 
 type Bounds = LoadedFrame['bounds'];
 type FrameCorrection = { dx: number; dy: number; reason: string };
+interface FramePlacementCalibration {
+  sourceAnchorX: number;
+  sourceAnchorY: number;
+  templateAnchorX: number;
+  templateAnchorY: number;
+}
 
 interface ComparisonArtifact {
   action: string;
@@ -82,13 +88,110 @@ const cellOriginY = 130;
 const sourceOriginX = 145;
 const sourceOriginY = 186;
 
-const manualFrameCorrections: Partial<Record<BakeTarget, Record<string, FrameCorrection>>> = {
-  'cape-balloon': {
-    '기본(한손):0': { dx: 18, dy: 0, reason: 'user-measured stand1 frame 0 was -18,0 from desired MSW preview position' },
-    '기본(한손):1': { dx: 21, dy: 0, reason: 'user-measured stand1 frame 1 was -21,0 from desired MSW preview position' },
-    '기본(한손):2': { dx: 21, dy: 5, reason: 'user-measured stand1 frame 2 was -21,-5 from desired MSW preview position' },
-  },
+const capeBalloonReferenceShare = 'NvkIKXl2Xw64';
+const capeBalloonFramePlacementCalibration: Record<string, FramePlacementCalibration> = {
+  "걷기(한손):0": { sourceAnchorX: 131, sourceAnchorY: 183, templateAnchorX: 115, templateAnchorY: 133 },
+  "걷기(한손):1": { sourceAnchorX: 131, sourceAnchorY: 168, templateAnchorX: 118, templateAnchorY: 147 },
+  "걷기(한손):2": { sourceAnchorX: 131, sourceAnchorY: 183, templateAnchorX: 115, templateAnchorY: 133 },
+  "걷기(한손):3": { sourceAnchorX: 129, sourceAnchorY: 179, templateAnchorX: 113, templateAnchorY: 129 },
+  "걷기(두손):0": { sourceAnchorX: 132, sourceAnchorY: 185, templateAnchorX: 118, templateAnchorY: 137 },
+  "걷기(두손):1": { sourceAnchorX: 131, sourceAnchorY: 186, templateAnchorX: 117, templateAnchorY: 140 },
+  "걷기(두손):2": { sourceAnchorX: 132, sourceAnchorY: 185, templateAnchorX: 118, templateAnchorY: 137 },
+  "걷기(두손):3": { sourceAnchorX: 131, sourceAnchorY: 168, templateAnchorX: 118, templateAnchorY: 138 },
+  "기본(한손):0": { sourceAnchorX: 132, sourceAnchorY: 184, templateAnchorX: 118, templateAnchorY: 146 },
+  "기본(한손):1": { sourceAnchorX: 132, sourceAnchorY: 185, templateAnchorX: 117, templateAnchorY: 138 },
+  "기본(한손):2": { sourceAnchorX: 132, sourceAnchorY: 185, templateAnchorX: 116, templateAnchorY: 136 },
+  "기본(두손):0": { sourceAnchorX: 132, sourceAnchorY: 186, templateAnchorX: 116, templateAnchorY: 137 },
+  "기본(두손):1": { sourceAnchorX: 132, sourceAnchorY: 186, templateAnchorX: 117, templateAnchorY: 138 },
+  "기본(두손):2": { sourceAnchorX: 132, sourceAnchorY: 185, templateAnchorX: 118, templateAnchorY: 139 },
+  "전투 대기:0": { sourceAnchorX: 130, sourceAnchorY: 168, templateAnchorX: 125, templateAnchorY: 146 },
+  "전투 대기:1": { sourceAnchorX: 131, sourceAnchorY: 169, templateAnchorX: 126, templateAnchorY: 146 },
+  "전투 대기:2": { sourceAnchorX: 131, sourceAnchorY: 168, templateAnchorX: 126, templateAnchorY: 146 },
+  "스윙O1:0": { sourceAnchorX: 124, sourceAnchorY: 170, templateAnchorX: 110, templateAnchorY: 124 },
+  "스윙O1:1": { sourceAnchorX: 125, sourceAnchorY: 168, templateAnchorX: 120, templateAnchorY: 128 },
+  "스윙O1:2": { sourceAnchorX: 95, sourceAnchorY: 171, templateAnchorX: 98, templateAnchorY: 124 },
+  "스윙O2:0": { sourceAnchorX: 122, sourceAnchorY: 168, templateAnchorX: 119, templateAnchorY: 120 },
+  "스윙O2:1": { sourceAnchorX: 117, sourceAnchorY: 173, templateAnchorX: 110, templateAnchorY: 124 },
+  "스윙O2:2": { sourceAnchorX: 116, sourceAnchorY: 169, templateAnchorX: 113, templateAnchorY: 124 },
+  "스윙O3:0": { sourceAnchorX: 114, sourceAnchorY: 178, templateAnchorX: 103, templateAnchorY: 128 },
+  "스윙O3:1": { sourceAnchorX: 103, sourceAnchorY: 181, templateAnchorX: 111, templateAnchorY: 132 },
+  "스윙O3:2": { sourceAnchorX: 99, sourceAnchorY: 170, templateAnchorX: 110, templateAnchorY: 124 },
+  "스윙OF:0": { sourceAnchorX: 119, sourceAnchorY: 170, templateAnchorX: 114, templateAnchorY: 124 },
+  "스윙OF:1": { sourceAnchorX: 127, sourceAnchorY: 186, templateAnchorX: 125, templateAnchorY: 143 },
+  "스윙OF:2": { sourceAnchorX: 106, sourceAnchorY: 165, templateAnchorX: 121, templateAnchorY: 120 },
+  "스윙OF:3": { sourceAnchorX: 80, sourceAnchorY: 174, templateAnchorX: 100, templateAnchorY: 125 },
+  "스윙T1:0": { sourceAnchorX: 131, sourceAnchorY: 198, templateAnchorX: 115, templateAnchorY: 149 },
+  "스윙T1:1": { sourceAnchorX: 114, sourceAnchorY: 173, templateAnchorX: 111, templateAnchorY: 124 },
+  "스윙T1:2": { sourceAnchorX: 99, sourceAnchorY: 171, templateAnchorX: 98, templateAnchorY: 124 },
+  "스윙T2:0": { sourceAnchorX: 127, sourceAnchorY: 194, templateAnchorX: 122, templateAnchorY: 144 },
+  "스윙T2:1": { sourceAnchorX: 117, sourceAnchorY: 176, templateAnchorX: 112, templateAnchorY: 126 },
+  "스윙T2:2": { sourceAnchorX: 99, sourceAnchorY: 172, templateAnchorX: 97, templateAnchorY: 125 },
+  "스윙T3:0": { sourceAnchorX: 131, sourceAnchorY: 169, templateAnchorX: 119, templateAnchorY: 147 },
+  "스윙T3:1": { sourceAnchorX: 116, sourceAnchorY: 172, templateAnchorX: 109, templateAnchorY: 125 },
+  "스윙T3:2": { sourceAnchorX: 113, sourceAnchorY: 168, templateAnchorX: 103, templateAnchorY: 124 },
+  "스윙TF:0": { sourceAnchorX: 136, sourceAnchorY: 179, templateAnchorX: 134, templateAnchorY: 129 },
+  "스윙TF:1": { sourceAnchorX: 127, sourceAnchorY: 167, templateAnchorX: 128, templateAnchorY: 130 },
+  "스윙TF:2": { sourceAnchorX: 113, sourceAnchorY: 169, templateAnchorX: 114, templateAnchorY: 121 },
+  "스윙TF:3": { sourceAnchorX: 95, sourceAnchorY: 172, templateAnchorX: 97, templateAnchorY: 125 },
+  "사다리:0": { sourceAnchorX: 139, sourceAnchorY: 172, templateAnchorX: 119, templateAnchorY: 122 },
+  "사다리:1": { sourceAnchorX: 140, sourceAnchorY: 175, templateAnchorX: 117, templateAnchorY: 124 },
+  "찌르기O1:0": { sourceAnchorX: 120, sourceAnchorY: 180, templateAnchorX: 111, templateAnchorY: 130 },
+  "찌르기O1:1": { sourceAnchorX: 106, sourceAnchorY: 179, templateAnchorX: 109, templateAnchorY: 129 },
+  "찌르기O2:0": { sourceAnchorX: 120, sourceAnchorY: 176, templateAnchorX: 112, templateAnchorY: 126 },
+  "찌르기O2:1": { sourceAnchorX: 106, sourceAnchorY: 178, templateAnchorX: 113, templateAnchorY: 129 },
+  "찌르기T1:0": { sourceAnchorX: 116, sourceAnchorY: 169, templateAnchorX: 117, templateAnchorY: 122 },
+  "찌르기T1:1": { sourceAnchorX: 101, sourceAnchorY: 172, templateAnchorX: 104, templateAnchorY: 125 },
+  "찌르기T1:2": { sourceAnchorX: 92, sourceAnchorY: 184, templateAnchorX: 107, templateAnchorY: 134 },
+  "찌르기T2:0": { sourceAnchorX: 125, sourceAnchorY: 168, templateAnchorX: 117, templateAnchorY: 121 },
+  "찌르기T2:1": { sourceAnchorX: 107, sourceAnchorY: 173, templateAnchorX: 99, templateAnchorY: 125 },
+  "찌르기T2:2": { sourceAnchorX: 101, sourceAnchorY: 184, templateAnchorX: 109, templateAnchorY: 134 },
+  "엎드리기:0": { sourceAnchorX: 103, sourceAnchorY: 197, templateAnchorX: 106, templateAnchorY: 147 },
+  "찌르기TF:0": { sourceAnchorX: 115, sourceAnchorY: 184, templateAnchorX: 126, templateAnchorY: 130 },
+  "찌르기TF:1": { sourceAnchorX: 117, sourceAnchorY: 189, templateAnchorX: 126, templateAnchorY: 130 },
+  "찌르기TF:2": { sourceAnchorX: 120, sourceAnchorY: 164, templateAnchorX: 129, templateAnchorY: 130 },
+  "찌르기TF:3": { sourceAnchorX: 92, sourceAnchorY: 184, templateAnchorX: 126, templateAnchorY: 130 },
+  "날기:0": { sourceAnchorX: 134, sourceAnchorY: 174, templateAnchorX: 122, templateAnchorY: 124 },
+  "날기:1": { sourceAnchorX: 134, sourceAnchorY: 174, templateAnchorX: 126, templateAnchorY: 124 },
+  "점프:0": { sourceAnchorX: 128, sourceAnchorY: 191, templateAnchorX: 115, templateAnchorY: 141 },
+  "쏘기(활):0": { sourceAnchorX: 119, sourceAnchorY: 175, templateAnchorX: 113, templateAnchorY: 125 },
+  "쏘기(활):1": { sourceAnchorX: 119, sourceAnchorY: 175, templateAnchorX: 113, templateAnchorY: 125 },
+  "쏘기(활):2": { sourceAnchorX: 119, sourceAnchorY: 175, templateAnchorX: 113, templateAnchorY: 125 },
+  "쏘기F:0": { sourceAnchorX: 118, sourceAnchorY: 171, templateAnchorX: 112, templateAnchorY: 122 },
+  "쏘기F:1": { sourceAnchorX: 116, sourceAnchorY: 172, templateAnchorX: 107, templateAnchorY: 123 },
+  "쏘기F:2": { sourceAnchorX: 116, sourceAnchorY: 172, templateAnchorX: 126, templateAnchorY: 130 },
+  "쏘기(석궁):0": { sourceAnchorX: 126, sourceAnchorY: 178, templateAnchorX: 119, templateAnchorY: 128 },
+  "쏘기(석궁):1": { sourceAnchorX: 126, sourceAnchorY: 178, templateAnchorX: 119, templateAnchorY: 128 },
+  "쏘기(석궁):2": { sourceAnchorX: 126, sourceAnchorY: 178, templateAnchorX: 119, templateAnchorY: 128 },
+  "쏘기(석궁):3": { sourceAnchorX: 126, sourceAnchorY: 178, templateAnchorX: 119, templateAnchorY: 128 },
+  "쏘기(석궁):4": { sourceAnchorX: 128, sourceAnchorY: 178, templateAnchorX: 121, templateAnchorY: 128 },
+  "스윙P1:0": { sourceAnchorX: 131, sourceAnchorY: 198, templateAnchorX: 115, templateAnchorY: 149 },
+  "스윙P1:1": { sourceAnchorX: 112, sourceAnchorY: 177, templateAnchorX: 109, templateAnchorY: 127 },
+  "스윙P1:2": { sourceAnchorX: 99, sourceAnchorY: 171, templateAnchorX: 98, templateAnchorY: 124 },
+  "스윙P2:0": { sourceAnchorX: 121, sourceAnchorY: 170, templateAnchorX: 114, templateAnchorY: 121 },
+  "스윙P2:1": { sourceAnchorX: 118, sourceAnchorY: 181, templateAnchorX: 111, templateAnchorY: 131 },
+  "스윙P2:2": { sourceAnchorX: 103, sourceAnchorY: 172, templateAnchorX: 97, templateAnchorY: 125 },
+  "스윙PF:0": { sourceAnchorX: 115, sourceAnchorY: 184, templateAnchorX: 100, templateAnchorY: 134 },
+  "스윙PF:1": { sourceAnchorX: 117, sourceAnchorY: 189, templateAnchorX: 104, templateAnchorY: 139 },
+  "스윙PF:2": { sourceAnchorX: 120, sourceAnchorY: 164, templateAnchorX: 121, templateAnchorY: 130 },
+  "스윙PF:3": { sourceAnchorX: 84, sourceAnchorY: 171, templateAnchorX: 115, templateAnchorY: 124 },
+  "앉기:0": { sourceAnchorX: 131, sourceAnchorY: 195, templateAnchorX: 125, templateAnchorY: 149 },
+  "찌르기OF:0": { sourceAnchorX: 127, sourceAnchorY: 171, templateAnchorX: 119, templateAnchorY: 124 },
+  "찌르기OF:1": { sourceAnchorX: 97, sourceAnchorY: 172, templateAnchorX: 98, templateAnchorY: 125 },
+  "찌르기OF:2": { sourceAnchorX: 81, sourceAnchorY: 179, templateAnchorX: 93, templateAnchorY: 130 },
+  "밧줄:0": { sourceAnchorX: 142, sourceAnchorY: 182, templateAnchorX: 120, templateAnchorY: 133 },
+  "밧줄:1": { sourceAnchorX: 135, sourceAnchorY: 168, templateAnchorX: 119, templateAnchorY: 138 },
 };
+
+
+const framePlacementCalibrations: Partial<Record<BakeTarget, Record<string, FramePlacementCalibration>>> = {
+  'cape-balloon': capeBalloonFramePlacementCalibration,
+};
+
+const calibrationReferenceShares: Partial<Record<BakeTarget, string>> = {
+  'cape-balloon': capeBalloonReferenceShare,
+};
+
+const manualFrameCorrections: Partial<Record<BakeTarget, Record<string, FrameCorrection>>> = {};
 
 const bakedCells: BakedCell[] = [
   ...cells('걷기(한손)', 0, 0, 4),
@@ -202,15 +305,22 @@ function correctionKey(cell: Pick<BakedCell, 'action' | 'frameIndex'>): string {
   return `${cell.action}:${cell.frameIndex}`;
 }
 
-function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds, correction?: FrameCorrection): void {
+function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds, correction?: FrameCorrection, placement?: FramePlacementCalibration): void {
   const cellLeft = cell.col * cellWidth;
   const cellTop = cell.row * cellHeight;
-  const sourceCenterX = frame.bounds.empty ? sourceOriginX : (frame.bounds.left + frame.bounds.right) / 2;
-  const sourceBottomY = frame.bounds.empty ? sourceOriginY : frame.bounds.bottom;
-  const targetCenterX = guideBounds && !guideBounds.empty ? (guideBounds.left + guideBounds.right) / 2 : cellOriginX;
-  const targetBottomY = guideBounds && !guideBounds.empty ? guideBounds.bottom : cellOriginY;
-  const destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX + (correction?.dx ?? 0));
-  const destTop = Math.round(cellTop + targetBottomY - sourceBottomY + (correction?.dy ?? 0));
+  let destLeft: number;
+  let destTop: number;
+  if (placement) {
+    destLeft = Math.round(cellLeft + placement.templateAnchorX - placement.sourceAnchorX + (correction?.dx ?? 0));
+    destTop = Math.round(cellTop + placement.templateAnchorY - placement.sourceAnchorY + (correction?.dy ?? 0));
+  } else {
+    const sourceCenterX = frame.bounds.empty ? sourceOriginX : (frame.bounds.left + frame.bounds.right) / 2;
+    const sourceBottomY = frame.bounds.empty ? sourceOriginY : frame.bounds.bottom;
+    const targetCenterX = guideBounds && !guideBounds.empty ? (guideBounds.left + guideBounds.right) / 2 : cellOriginX;
+    const targetBottomY = guideBounds && !guideBounds.empty ? guideBounds.bottom : cellOriginY;
+    destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX + (correction?.dx ?? 0));
+    destTop = Math.round(cellTop + targetBottomY - sourceBottomY + (correction?.dy ?? 0));
+  }
   for (let y = 0; y < frame.height; y += 1) {
     const ty = destTop + y;
     if (ty < 0 || ty >= sheetHeight) continue;
@@ -390,6 +500,72 @@ function safePathSegment(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
 }
 
+
+function overlayBuffers(base: Uint8ClampedArray, overlay: Uint8ClampedArray, overlayOpacity = 0.75): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(base);
+  for (let i = 0; i < overlay.length; i += 4) {
+    const adjusted = new Uint8ClampedArray(4);
+    adjusted[0] = overlay[i];
+    adjusted[1] = overlay[i + 1];
+    adjusted[2] = overlay[i + 2];
+    adjusted[3] = Math.round(overlay[i + 3] * overlayOpacity);
+    over(out, i, adjusted, 0);
+  }
+  return out;
+}
+
+function writeOverlayStrip(filePath: string, title: string, frames: Uint8ClampedArray[]): void {
+  const scale = 2;
+  const labelHeight = 36;
+  const width = Math.max(1, frames.length) * cellWidth * scale;
+  const height = labelHeight + cellHeight * scale;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#020617';
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText(title, 12, 24);
+  frames.forEach((frame, index) => {
+    const cellCanvas = createCanvas(cellWidth, cellHeight);
+    const cellCtx = cellCanvas.getContext('2d');
+    const imageData = cellCtx.createImageData(cellWidth, cellHeight);
+    imageData.data.set(frame);
+    cellCtx.putImageData(imageData, 0, 0);
+    ctx.drawImage(cellCanvas, index * cellWidth * scale, labelHeight, cellWidth * scale, cellHeight * scale);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(String(index), index * cellWidth * scale + 8, labelHeight + 22);
+  });
+  writeFileSync(filePath, canvas.toBuffer('image/png'));
+}
+
+function writePlacementOverlays(templateSheet: Uint8ClampedArray, convertedSheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, outDir: string) {
+  const overlayRoot = path.join(outDir, 'placement-overlays');
+  mkdirSync(overlayRoot, { recursive: true });
+  const overlaysByAction = new Map<string, Uint8ClampedArray[]>();
+  for (const cell of bakedCells) {
+    const template = cropCell(templateSheet, sheetWidth, sheetHeight, cell);
+    const converted = cropCell(convertedSheet, sheetWidth, sheetHeight, cell);
+    const overlay = overlayBuffers(template, converted, 0.75);
+    const actionDir = path.join(overlayRoot, safePathSegment(cell.action));
+    mkdirSync(actionDir, { recursive: true });
+    const fileName = `${String(cell.frameIndex).padStart(2, '0')}.png`;
+    writeRgbaPng(path.join(actionDir, fileName), cellWidth, cellHeight, overlay);
+    const actionOverlays = overlaysByAction.get(cell.action) ?? [];
+    actionOverlays[cell.frameIndex] = overlay;
+    overlaysByAction.set(cell.action, actionOverlays);
+  }
+  const stand1Overlays = overlaysByAction.get('기본(한손)')?.filter(Boolean) ?? [];
+  const stand1OverlayStripPath = stand1Overlays.length > 0 ? path.join(outDir, 'placement-overlay-stand1.png') : null;
+  if (stand1OverlayStripPath) writeOverlayStrip(stand1OverlayStripPath, 'Template + converted overlay: 기본(한손)', stand1Overlays);
+  return {
+    overlayRoot: path.relative(outDir, overlayRoot),
+    stand1OverlayStrip: stand1OverlayStripPath ? path.relative(outDir, stand1OverlayStripPath) : null,
+  };
+}
+
 function writeComparisonFramePng(filePath: string, action: string, frameIndex: number, source: Uint8ClampedArray, template: Uint8ClampedArray, converted: Uint8ClampedArray): void {
   const scale = 2;
   const labelHeight = 42;
@@ -548,11 +724,13 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateReferenceSheet = renderTemplateReferenceSheet(psd);
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
-  const targetManualCorrections = manualFrameCorrections[target] ?? {};
+  const targetPlacementCalibration = framePlacementCalibrations[target] ?? {};
+  const hasPlacementCalibration = Object.keys(targetPlacementCalibration).length > 0;
+  const targetManualCorrections = hasPlacementCalibration ? {} : (manualFrameCorrections[target] ?? {});
   const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
   for (const cell of bakedCells) {
     const key = correctionKey(cell);
-    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, cell, guideBoundsByCell.get(key), targetManualCorrections[key]);
+    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, cell, guideBoundsByCell.get(key), targetManualCorrections[key], targetPlacementCalibration[key]);
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
   if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
@@ -579,6 +757,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   writeRgbaPng(path.join(outDir, 'diff.png'), psd.width, psd.height, diff.diff);
   const frameValidation = validateCells(sheet, convertedEditableSheet, psd.width, psd.height, outDir);
   const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
+  const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
 
   const supportedKeys = new Set(bakedCells.map((cell) => `${cell.action}:${cell.frameIndex}`));
   const skipped = [...uniqueFrames.values()]
@@ -602,9 +781,14 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       fallbackCellOriginY: cellOriginY,
       fallbackSourceOriginX: sourceOriginX,
       fallbackSourceOriginY: sourceOriginY,
-      anchor: 'per-frame-template-guide-character-bounds-center-bottom',
+      anchor: hasPlacementCalibration ? 'hardcoded-reference-source-anchor-to-template-anchor' : 'per-frame-template-guide-character-bounds-center-bottom',
       zmapPresetRemoved: config.removeZmapPreset,
       targetLayerPromotedToTop: config.promoteTargetLayerToTop,
+      framePlacementCalibration: hasPlacementCalibration ? {
+        referenceShare: calibrationReferenceShares[target],
+        method: 'hardcoded lower-left lower-body anchor mapping from reference source frame to Avatar_Cape_balloon guide cell',
+        entries: Object.entries(targetPlacementCalibration).map(([key, placement]) => ({ key, ...placement })),
+      } : null,
       manualFrameCorrections: Object.entries(targetManualCorrections).map(([key, correction]) => ({ key, ...correction })),
     },
     validation: {
@@ -616,6 +800,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       frameCellMaxChannelDelta: frameValidation.maxChannelDelta,
       frameCells: frameValidation.frames,
       motionComparisonGifsGenerated: motionComparisons.filter((artifact) => artifact.gifPath).length,
+      placementOverlays,
       motionComparisons,
     },
     warnings: [
