@@ -61,6 +61,7 @@ interface BakeResult {
     psd: string;
     report: string;
     expectedSheet: string;
+    templateGuideSheet?: string;
     templateReferenceSheet: string;
     convertedEditableSheet: string;
     diff: string;
@@ -349,6 +350,7 @@ export function App() {
               <a href={bakeResult.files.psd}>완성 PSD 다운로드</a>
               <a href={bakeResult.files.report} target="_blank" rel="noreferrer">validation-report.json</a>
               <a href={bakeResult.files.expectedSheet} target="_blank" rel="noreferrer">MeAegi source sheet</a>
+              {bakeResult.files.templateGuideSheet ? <a href={bakeResult.files.templateGuideSheet} target="_blank" rel="noreferrer">Template guide sheet</a> : null}
               <a href={bakeResult.files.templateReferenceSheet} target="_blank" rel="noreferrer">Original template sheet</a>
               <a href={bakeResult.files.convertedEditableSheet} target="_blank" rel="noreferrer">Converted PSD sheet</a>
               <a href={bakeResult.files.diff} target="_blank" rel="noreferrer">source-vs-PSD diff</a>

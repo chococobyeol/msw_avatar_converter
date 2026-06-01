@@ -26,6 +26,8 @@ interface LoadedFrame {
   bounds: { left: number; top: number; right: number; bottom: number; empty: boolean };
 }
 
+type Bounds = LoadedFrame['bounds'];
+
 interface ComparisonArtifact {
   action: string;
   frameCount: number;
@@ -43,12 +45,14 @@ const targetConfigs = {
     outputName: 'Avatar_Cape.psd',
     editLayerPath: 'edithere:cape_capeOverHead_10',
     expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
   },
   longcoat: {
     templatePath: 'avatartemplate/Avatar_Longcoat.psd',
     outputName: 'Avatar_Longcoat.psd',
     editLayerPath: 'edithere:mailArm_mailArmOverHair_22',
     expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
   },
 } as const;
 
@@ -175,9 +179,15 @@ function over(dst: Uint8ClampedArray, dstOffset: number, src: Uint8ClampedArray,
   dst[dstOffset + 3] = Math.round(oa * 255);
 }
 
-function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell): void {
-  const destLeft = Math.round(cell.col * cellWidth + cellOriginX - sourceOriginX);
-  const destTop = Math.round(cell.row * cellHeight + cellOriginY - sourceOriginY);
+function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds): void {
+  const cellLeft = cell.col * cellWidth;
+  const cellTop = cell.row * cellHeight;
+  const sourceCenterX = frame.bounds.empty ? sourceOriginX : (frame.bounds.left + frame.bounds.right) / 2;
+  const sourceBottomY = frame.bounds.empty ? sourceOriginY : frame.bounds.bottom;
+  const targetCenterX = guideBounds && !guideBounds.empty ? (guideBounds.left + guideBounds.right) / 2 : cellOriginX;
+  const targetBottomY = guideBounds && !guideBounds.empty ? guideBounds.bottom : cellOriginY;
+  const destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX);
+  const destTop = Math.round(cellTop + targetBottomY - sourceBottomY);
   for (let y = 0; y < frame.height; y += 1) {
     const ty = destTop + y;
     if (ty < 0 || ty >= sheetHeight) continue;
@@ -204,6 +214,15 @@ function hideGuides(layers: Layer[] | undefined): void {
     if ((layer.name ?? '').startsWith('guide')) layer.hidden = true;
     hideGuides(layer.children);
   }
+}
+
+function promoteLayerToTop(psd: Psd, layerPath: string): void {
+  if (!psd.children) return;
+  const targetName = layerPath.split('/').at(-1);
+  const index = psd.children.findIndex((layer) => layer.name === targetName);
+  if (index <= 0) return;
+  const [layer] = psd.children.splice(index, 1);
+  psd.children.unshift(layer);
 }
 
 function cropSheet(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, left: number, top: number, width: number, height: number): Uint8ClampedArray {
@@ -239,6 +258,7 @@ function blitLayerToSheet(sheet: Uint8ClampedArray, sheetWidth: number, sheetHei
       if (targetX < 0 || targetX >= sheetWidth) continue;
       const sourceOffset = (y * image.width + x) * 4;
       const targetOffset = (targetY * sheetWidth + targetX) * 4;
+      if (data[sourceOffset + 3] === 0) continue;
       sheet[targetOffset] = data[sourceOffset];
       sheet[targetOffset + 1] = data[sourceOffset + 1];
       sheet[targetOffset + 2] = data[sourceOffset + 2];
@@ -324,6 +344,10 @@ function safeFrameFileName(action: string, frameIndex: number): string {
 
 function cropCell(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, cell: BakedCell): Uint8ClampedArray {
   return cropSheet(sheet, sheetWidth, sheetHeight, cell.col * cellWidth, cell.row * cellHeight, cellWidth, cellHeight);
+}
+
+function cellBounds(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, cell: BakedCell): Bounds {
+  return alphaBounds(cellWidth, cellHeight, cropCell(sheet, sheetWidth, sheetHeight, cell));
 }
 
 function safePathSegment(value: string): string {
@@ -484,17 +508,21 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   }
 
   const psd = readPsd(readFileSync(config.templatePath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
+  const originalTemplateGuideSheet = renderLayerSheet(psd, (entry) => entry.path.includes('guide_character'));
   const originalTemplateReferenceSheet = renderTemplateReferenceSheet(psd);
   const originalTemplateEditableSheet = renderEditableSheet(psd);
+  const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
   const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
   for (const cell of bakedCells) {
-    drawFrame(sheet, psd.width, psd.height, frameByKey.get(`${cell.action}:${cell.frameIndex}`)!, cell);
+    drawFrame(sheet, psd.width, psd.height, frameByKey.get(`${cell.action}:${cell.frameIndex}`)!, cell, guideBoundsByCell.get(`${cell.action}:${cell.frameIndex}`));
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
+  if (config.promoteTargetLayerToTop) promoteLayerToTop(psd, config.editLayerPath);
   mkdirSync(outDir, { recursive: true });
   const psdPath = path.join(outDir, config.outputName);
   writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
   writeRgbaPng(path.join(outDir, 'expected-sheet.png'), psd.width, psd.height, sheet);
+  writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), psd.width, psd.height, originalTemplateGuideSheet);
   writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), psd.width, psd.height, originalTemplateReferenceSheet);
   writeRgbaPng(path.join(outDir, 'original-template-editable-sheet.png'), psd.width, psd.height, originalTemplateEditableSheet);
 
@@ -528,7 +556,15 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     skippedFrames: skipped.length,
     skipped,
     excludedExpressionFrames: [...uniqueFrames.values()].filter((frame) => frame.action.includes('눈깜빡임')).length,
-    placement: { cellWidth, cellHeight, cellOriginX, cellOriginY, sourceOriginX, sourceOriginY, anchor: 'maple-look-origin-to-msw-template-origin' },
+    placement: {
+      cellWidth,
+      cellHeight,
+      fallbackCellOriginX: cellOriginX,
+      fallbackCellOriginY: cellOriginY,
+      fallbackSourceOriginX: sourceOriginX,
+      fallbackSourceOriginY: sourceOriginY,
+      anchor: 'per-frame-template-guide-character-bounds-center-bottom',
+    },
     validation: {
       readbackLayerExactMatch: frameValidation.pass,
       diffPixels: diff.diffPixels,

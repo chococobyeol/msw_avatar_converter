@@ -81,6 +81,7 @@ function meaegiSharePlugin(): Plugin {
                 psd: artifactUrl(psdPath),
                 report: artifactUrl(path.join(outDir, 'validation-report.json')),
                 expectedSheet: artifactUrl(path.join(outDir, 'expected-sheet.png')),
+                templateGuideSheet: artifactUrl(path.join(outDir, 'original-template-guide-sheet.png')),
                 templateReferenceSheet: artifactUrl(path.join(outDir, 'original-template-reference-sheet.png')),
                 convertedEditableSheet: artifactUrl(path.join(outDir, 'converted-editable-sheet.png')),
                 diff: artifactUrl(path.join(outDir, 'diff.png')),
