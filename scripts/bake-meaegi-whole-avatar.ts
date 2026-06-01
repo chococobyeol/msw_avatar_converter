@@ -61,11 +61,11 @@ export interface BakeMeaegiWholeAvatarInput {
 }
 
 const cellWidth = 250;
-const cellHeight = 175;
+const cellHeight = 250;
 const cellOriginX = 126;
 const cellOriginY = 130;
-const sourceOriginX = 150;
-const sourceOriginY = 200;
+const sourceOriginX = 145;
+const sourceOriginY = 186;
 
 const bakedCells: BakedCell[] = [
   ...cells('걷기(한손)', 0, 0, 4),
