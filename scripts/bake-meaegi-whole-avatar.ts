@@ -489,20 +489,25 @@ function overlayBuffers(base: Uint8ClampedArray, overlay: Uint8ClampedArray, ove
 function markRedDot(buffer: Uint8ClampedArray, width: number, height: number, x: number, y: number, color: [number, number, number, number] = [255, 0, 0, 255]): void {
   const px = Math.round(x);
   const py = Math.round(y);
-  const points = [
-    [px, py],
-    [px - 1, py],
-    [px + 1, py],
-    [px, py - 1],
-    [px, py + 1],
-  ];
-  for (const [dotX, dotY] of points) {
-    if (dotX < 0 || dotX >= width || dotY < 0 || dotY >= height) continue;
-    const offset = (dotY * width + dotX) * 4;
-    buffer[offset] = color[0];
-    buffer[offset + 1] = color[1];
-    buffer[offset + 2] = color[2];
-    buffer[offset + 3] = color[3];
+  for (let dotY = py - 4; dotY <= py + 4; dotY += 1) {
+    if (dotY < 0 || dotY >= height) continue;
+    for (let dotX = px - 4; dotX <= px + 4; dotX += 1) {
+      if (dotX < 0 || dotX >= width || dotY < 0 || dotY >= height) continue;
+      const distance = Math.abs(dotX - px) + Math.abs(dotY - py);
+      const offset = (dotY * width + dotX) * 4;
+      if (distance === 5) {
+        buffer[offset] = 255;
+        buffer[offset + 1] = 255;
+        buffer[offset + 2] = 255;
+        buffer[offset + 3] = 255;
+        continue;
+      }
+      if (distance > 4) continue;
+      buffer[offset] = color[0];
+      buffer[offset + 1] = color[1];
+      buffer[offset + 2] = color[2];
+      buffer[offset + 3] = color[3];
+    }
   }
 }
 
@@ -523,6 +528,36 @@ function writeRedDotSheets(
   const templateRedDots = new Uint8ClampedArray(originalTemplateGuideSheet);
   const convertedRedDots = new Uint8ClampedArray(convertedEditableSheet);
   const overlayRedDots = overlayBuffers(originalTemplateGuideSheet, convertedEditableSheet, 0.75);
+  const coordinates = records.map((record) => ({
+    key: record.key,
+    action: record.action,
+    frameIndex: record.frameIndex,
+    col: record.col,
+    row: record.row,
+    templateRedDot: {
+      sheetX: record.col * cellWidth + record.targetAnchor.x,
+      sheetY: record.row * cellHeight + record.targetAnchor.y,
+      cellX: record.targetAnchor.x,
+      cellY: record.targetAnchor.y,
+    },
+    sourceBakedRedDot: {
+      sheetX: record.col * cellWidth + record.actualAnchorInCell.x,
+      sheetY: record.row * cellHeight + record.actualAnchorInCell.y,
+      cellX: record.actualAnchorInCell.x,
+      cellY: record.actualAnchorInCell.y,
+    },
+    convertedRedDot: {
+      sheetX: record.col * cellWidth + record.actualAnchorInCell.x,
+      sheetY: record.row * cellHeight + record.actualAnchorInCell.y,
+      cellX: record.actualAnchorInCell.x,
+      cellY: record.actualAnchorInCell.y,
+    },
+    deltaConvertedMinusTemplate: record.error,
+    suggestedCorrectionToApplyToConverted: {
+      dx: -record.error.dx,
+      dy: -record.error.dy,
+    },
+  }));
   for (const record of records) {
     const cell = { action: record.action, frameIndex: record.frameIndex, col: record.col, row: record.row };
     markCellRedDot(sourceRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
@@ -535,11 +570,13 @@ function writeRedDotSheets(
   writeRgbaPng(path.join(outDir, 'red-dot-template-guide-sheet.png'), sheetWidth, sheetHeight, templateRedDots);
   writeRgbaPng(path.join(outDir, 'red-dot-converted-sheet.png'), sheetWidth, sheetHeight, convertedRedDots);
   writeRgbaPng(path.join(outDir, 'red-dot-template-vs-converted-overlay-sheet.png'), sheetWidth, sheetHeight, overlayRedDots);
+  writeFileSync(path.join(outDir, 'red-dot-coordinates.json'), JSON.stringify(coordinates, null, 2));
   return {
     sourceBakedSheet: 'red-dot-source-baked-sheet.png',
     templateGuideSheet: 'red-dot-template-guide-sheet.png',
     convertedSheet: 'red-dot-converted-sheet.png',
     overlaySheet: 'red-dot-template-vs-converted-overlay-sheet.png',
+    coordinates: 'red-dot-coordinates.json',
   };
 }
 
@@ -725,7 +762,7 @@ function validateCells(expectedSheet: Uint8ClampedArray, readbackSheet: Uint8Cla
   };
 }
 
-function validatePlacementRecords(records: PlacementRecord[]) {
+function validatePlacementRecords(records: PlacementRecord[], sheetWidth: number, sheetHeight: number) {
   const frames = records.map((record) => ({
     key: record.key,
     action: record.action,
@@ -738,7 +775,19 @@ function validatePlacementRecords(records: PlacementRecord[]) {
     destTop: record.destTop,
     actualAnchorInCell: record.actualAnchorInCell,
     error: record.error,
-    pass: record.error.dx === 0 && record.error.dy === 0,
+    sheetAnchor: {
+      x: record.col * cellWidth + record.actualAnchorInCell.x,
+      y: record.row * cellHeight + record.actualAnchorInCell.y,
+    },
+    cellFullyInsideSheet: (record.col + 1) * cellWidth <= sheetWidth && (record.row + 1) * cellHeight <= sheetHeight,
+    anchorInsideSheet:
+      record.col * cellWidth + record.actualAnchorInCell.x >= 0 &&
+      record.col * cellWidth + record.actualAnchorInCell.x < sheetWidth &&
+      record.row * cellHeight + record.actualAnchorInCell.y >= 0 &&
+      record.row * cellHeight + record.actualAnchorInCell.y < sheetHeight,
+  })).map((frame) => ({
+    ...frame,
+    pass: frame.error.dx === 0 && frame.error.dy === 0 && frame.cellFullyInsideSheet && frame.anchorInsideSheet,
   }));
   return {
     pass: frames.every((frame) => frame.pass),
@@ -811,7 +860,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const diff = diffBuffers(psd.width, psd.height, sheet, convertedEditableSheet);
   writeRgbaPng(path.join(outDir, 'diff.png'), psd.width, psd.height, diff.diff);
   const frameValidation = validateCells(sheet, convertedEditableSheet, psd.width, psd.height, outDir);
-  const placementValidation = validatePlacementRecords(placementRecords);
+  const placementValidation = validatePlacementRecords(placementRecords, psd.width, psd.height);
   const redDotArtifacts = writeRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, psd.width, psd.height, placementRecords, outDir);
   const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
   const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);

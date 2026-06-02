@@ -13,7 +13,8 @@
     "fixtures:validate": "tsx scripts/validate-fixtures.ts",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test:ui": "tsx --test tests/unit/ui.test.tsx"
+    "test:ui": "tsx --test tests/unit/ui.test.tsx",
+    "red-dot:measure": "tsx scripts/measure-red-dot-drift.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.7.0",
