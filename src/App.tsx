@@ -77,6 +77,7 @@ interface BakeResult {
   };
   files: {
     psd: string;
+    psdDownloadName?: string;
     report: string;
     expectedSheet: string;
     templateGuideSheet?: string;
@@ -321,10 +322,14 @@ export function App() {
       const frameCellMaxDelta = body.report.validation.frameCellMaxChannelDelta;
       const gifCount = body.report.validation.motionComparisonGifsGenerated;
       const placement = body.report.placement.placementValidation;
-      setBakeStatus(`converted ${target}: baked=${bakedFrames}, skipped=${skippedFrames}, redDotPass=${placement?.pass ?? false}, redDotMax=${placement?.maxAbsDx ?? '-'},${placement?.maxAbsDy ?? '-'}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
+      const appliedCorrections = body.report.placement.manualFrameCorrections;
+      const correctionCount = Array.isArray(appliedCorrections) ? appliedCorrections.length : 0;
+      setBakeStatus(`converted ${target}: corrections=${correctionCount}, baked=${bakedFrames}, skipped=${skippedFrames}, redDotPass=${placement?.pass ?? false}, redDotMax=${placement?.maxAbsDx ?? '-'},${placement?.maxAbsDy ?? '-'}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
       setImportLog((current) => [
         `GET /api/bake-meaegi target=${target} -> HTTP ${response.status}`,
         `convertedOutput=${body.report.outputPsd}`,
+        `downloadName=${body.files.psdDownloadName ?? '-'}`,
+        `appliedManualCorrections=${correctionCount}`,
         `redDotArtifacts=${JSON.stringify(body.files.redDots ?? {})}`,
         `redDotPlacementValidation=${JSON.stringify(body.report.placement.placementValidation ?? {})}`,
         `motionComparisonGifs=${gifCount} first=${body.files.motionComparisonGifs.find((artifact) => artifact.gif)?.gif ?? '-'}`,
@@ -460,7 +465,7 @@ export function App() {
               </div>
             ) : null}
             <div className="artifact-links">
-              <a href={bakeResult.files.psd}>완성 PSD 다운로드</a>
+              <a href={bakeResult.files.psd} download={bakeResult.files.psdDownloadName ?? true}>완성 PSD 다운로드: {bakeResult.files.psdDownloadName ?? 'PSD'}</a>
               <a href={bakeResult.files.report} target="_blank" rel="noreferrer">validation-report.json</a>
               <a href={bakeResult.files.expectedSheet} target="_blank" rel="noreferrer">MeAegi source sheet</a>
               {bakeResult.files.templateGuideSheet ? <a href={bakeResult.files.templateGuideSheet} target="_blank" rel="noreferrer">Template guide sheet</a> : null}

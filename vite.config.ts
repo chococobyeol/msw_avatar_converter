@@ -44,6 +44,11 @@ function calibrationPath(share: string, target: BakeTarget): string {
   return path.join(bakeOutDir(share, target), 'manual-frame-corrections.json');
 }
 
+function newBakeRunDir(share: string, target: BakeTarget): string {
+  const runId = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(bakeOutDir(share, target), 'runs', runId);
+}
+
 function readSavedCalibration(share: string, target: BakeTarget): Record<string, FrameCorrection> | undefined {
   const filePath = calibrationPath(share, target);
   if (!existsSync(filePath)) return undefined;
@@ -117,10 +122,11 @@ function meaegiSharePlugin(): Plugin {
           const target = (requestUrl.searchParams.get('target') || 'cape') as BakeTarget;
           const format = requestUrl.searchParams.get('format') || 'json';
           if (!share) throw new Error('share query is required.');
-          const outDir = bakeOutDir(share, target);
+          const outDir = newBakeRunDir(share, target);
           const savedManualFrameCorrections = readSavedCalibration(share, target);
           const { report, psdPath } = await bakeMeaegiWholeAvatar({ share, target, outDir, manualFrameCorrections: savedManualFrameCorrections });
           const artifactVersion = String(Date.now());
+          const downloadName = `${path.basename(psdPath, '.psd')}_${share}_${target}_${path.basename(outDir)}.psd`;
           if (format !== 'psd' && format !== 'download') {
             res.statusCode = 200;
             res.setHeader('content-type', 'application/json; charset=utf-8');
@@ -128,6 +134,7 @@ function meaegiSharePlugin(): Plugin {
               report,
               files: {
                 psd: artifactUrl(psdPath, artifactVersion),
+                psdDownloadName: downloadName,
                 report: artifactUrl(path.join(outDir, 'validation-report.json'), artifactVersion),
                 expectedSheet: artifactUrl(path.join(outDir, 'expected-sheet.png'), artifactVersion),
                 templateGuideSheet: artifactUrl(path.join(outDir, 'original-template-guide-sheet.png'), artifactVersion),
@@ -156,7 +163,7 @@ function meaegiSharePlugin(): Plugin {
           const psd = readFileSync(psdPath);
           res.statusCode = 200;
           res.setHeader('content-type', 'application/octet-stream');
-          res.setHeader('content-disposition', `attachment; filename="${path.basename(psdPath)}"`);
+          res.setHeader('content-disposition', `attachment; filename="${downloadName}"`);
           res.setHeader('x-bake-target', String(report.target));
           res.setHeader('x-bake-output', String(report.outputPsd));
           res.setHeader('x-bake-frames', String(report.bakedFrames));
