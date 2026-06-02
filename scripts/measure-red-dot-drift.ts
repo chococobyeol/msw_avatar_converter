@@ -52,7 +52,7 @@ const bakedCells: CellDef[] = [
   ...cells('날기', 5, 5, 2),
   ...cells('점프', 8, 5, 1),
   ...cells('쏘기(활)', 5, 6, 3),
-  ...cells('쏘기F', 9, 6, 3),
+  ...cells('쏘기F', 9, 6, 2),
   ...cells('쏘기(석궁)', 5, 7, 5),
   ...cells('스윙P1', 5, 9, 3),
   ...cells('스윙P2', 5, 10, 3),
@@ -77,8 +77,13 @@ function parseArgs() {
   }
   const expected = args.get('expected');
   const actual = args.get('actual');
-  if (!expected || !actual) throw new Error('Usage: npm/tsx scripts/measure-red-dot-drift.ts --expected <template-red-dot.png|psd> --actual <adjusted-red-dot.png|psd> [--out report.json]');
-  return { expected, actual, out: args.get('out') };
+  const expectedColor = (args.get('expected-color') ?? 'auto-expected') as DotSearchMode;
+  const actualColor = (args.get('actual-color') ?? 'auto-actual') as DotSearchMode;
+  if (!isDotSearchMode(expectedColor) || !isDotSearchMode(actualColor)) {
+    throw new Error('Use --expected-color/--actual-color red, green, auto-expected, or auto-actual.');
+  }
+  if (!expected || !actual) throw new Error('Usage: npm/tsx scripts/measure-red-dot-drift.ts --expected <template-red-dot.png|psd> --actual <adjusted-red-dot.png|psd> [--out report.json] [--expected-color red|green|auto-expected|auto-actual] [--actual-color red|green|auto-expected|auto-actual]');
+  return { expected, actual, out: args.get('out'), expectedColor, actualColor };
 }
 
 function flatten(layers: Layer[] | undefined, parent = ''): Array<{ path: string; layer: Layer }> {
@@ -141,6 +146,11 @@ function readImage(filePath: string): { width: number; height: number; rgba: Uin
 }
 
 type DotColor = keyof typeof dotThresholds;
+type DotSearchMode = DotColor | 'auto-expected' | 'auto-actual';
+
+function isDotSearchMode(value: string): value is DotSearchMode {
+  return value === 'red' || value === 'green' || value === 'auto-expected' || value === 'auto-actual';
+}
 
 function isDotPixel(rgba: Uint8ClampedArray, offset: number, color: DotColor): boolean {
   if (color === 'red') {
@@ -176,12 +186,18 @@ function findDotInCell(image: { width: number; height: number; rgba: Uint8Clampe
   return { sheetX, sheetY, cellX: sheetX - left, cellY: sheetY - top, pixels: count };
 }
 
-export function measureRedDotDrift(expectedPath: string, actualPath: string) {
+function findDotWithMode(image: { width: number; height: number; rgba: Uint8ClampedArray }, cell: CellDef, mode: DotSearchMode): DotPoint | null {
+  if (mode === 'red' || mode === 'green') return findDotInCell(image, cell, mode);
+  if (mode === 'auto-expected') return findDotInCell(image, cell, 'red') ?? findDotInCell(image, cell, 'green');
+  return findDotInCell(image, cell, 'green') ?? findDotInCell(image, cell, 'red');
+}
+
+export function measureRedDotDrift(expectedPath: string, actualPath: string, expectedColor: DotSearchMode = 'auto-expected', actualColor: DotSearchMode = 'auto-actual') {
   const expectedImage = readImage(expectedPath);
   const actualImage = readImage(actualPath);
   const frames = bakedCells.map((cell) => {
-    const expected = findDotInCell(expectedImage, cell, 'red') ?? findDotInCell(expectedImage, cell, 'green');
-    const actual = findDotInCell(actualImage, cell, 'green') ?? findDotInCell(actualImage, cell, 'red');
+    const expected = findDotWithMode(expectedImage, cell, expectedColor);
+    const actual = findDotWithMode(actualImage, cell, actualColor);
     const delta = expected && actual ? { dx: actual.cellX - expected.cellX, dy: actual.cellY - expected.cellY } : null;
     return {
       key: `${cell.action}:${cell.frameIndex}`,
@@ -201,6 +217,8 @@ export function measureRedDotDrift(expectedPath: string, actualPath: string) {
   return {
     expectedPath,
     actualPath,
+    expectedColor,
+    actualColor,
     cellWidth,
     cellHeight,
     dotThresholds,
@@ -215,8 +233,8 @@ export function measureRedDotDrift(expectedPath: string, actualPath: string) {
 }
 
 async function main() {
-  const { expected, actual, out } = parseArgs();
-  const report = measureRedDotDrift(expected, actual);
+  const { expected, actual, out, expectedColor, actualColor } = parseArgs();
+  const report = measureRedDotDrift(expected, actual, expectedColor, actualColor);
   const json = JSON.stringify(report, null, 2);
   if (out) writeFileSync(out, json);
   console.log(json);
