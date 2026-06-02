@@ -82,9 +82,38 @@ const targetConfigs = {
     promoteTargetLayerToTop: true,
     removeZmapPreset: true,
   },
+  gloves: {
+    templatePath: 'avatartemplate/Avatar_Gloves.psd',
+    outputName: 'Avatar_Gloves.psd',
+    editLayerPath: 'gloves_summary_13,18,23/edithere:rGlove_summary_13,23',
+    expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
+  },
+  pants: {
+    templatePath: 'avatartemplate/Avatar_Pants.psd',
+    outputName: 'Avatar_Pants.psd',
+    editLayerPath: 'edithere:pants_pantsBelowShoes_75',
+    expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
+  },
+  shoes: {
+    templatePath: 'avatartemplate/Avatar_Shoes.psd',
+    outputName: 'Avatar_Shoes.psd',
+    editLayerPath: 'edithere:shoes_shoesTop_69',
+    expandTargetLayerToCanvas: true,
+    promoteTargetLayerToTop: true,
+    removeZmapPreset: true,
+  },
 } as const;
 
 export type BakeTarget = keyof typeof targetConfigs;
+export const supportedBakeTargets = Object.keys(targetConfigs) as BakeTarget[];
+
+export function isBakeTarget(target: string): target is BakeTarget {
+  return target in targetConfigs;
+}
 
 export interface BakeMeaegiWholeAvatarInput {
   share: string;
@@ -121,6 +150,21 @@ const fixedFramePlacementOffsets: Record<BakeTarget, FixedFramePlacementOffset> 
     dx: 0,
     dy: 0,
     reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Longcoat.psd guide_character cells',
+  },
+  gloves: {
+    dx: 0,
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Gloves.psd guide_character cells',
+  },
+  pants: {
+    dx: 0,
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Pants.psd guide_character cells',
+  },
+  shoes: {
+    dx: 0,
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Shoes.psd guide_character cells',
   },
 };
 
@@ -210,6 +254,9 @@ const manualFrameCorrections: Partial<Record<BakeTarget, Record<string, FrameCor
   cape: userOverlayFrameCorrections,
   'cape-balloon': userOverlayFrameCorrections,
   longcoat: userOverlayFrameCorrections,
+  gloves: userOverlayFrameCorrections,
+  pants: userOverlayFrameCorrections,
+  shoes: userOverlayFrameCorrections,
 };
 
 const bakedCells: BakedCell[] = [
@@ -262,7 +309,7 @@ function parseArgs() {
   }
   const share = extractMeaegiShareId(args.get('share') ?? args.get('url') ?? 'https://meaegi.com/dressing-room?share=5gcTvkPmcFn5');
   const target = (args.get('target') ?? 'cape') as BakeTarget;
-  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape, cape-balloon, or longcoat.`);
+  if (!isBakeTarget(target)) throw new Error(`Unknown target "${target}". Use one of: ${supportedBakeTargets.join(', ')}.`);
   return {
     share,
     target,
@@ -615,11 +662,28 @@ function hideGuides(layers: Layer[] | undefined): void {
 
 function promoteLayerToTop(psd: Psd, layerPath: string): void {
   if (!psd.children) return;
-  const targetName = layerPath.split('/').at(-1);
-  const index = psd.children.findIndex((layer) => layer.name === targetName);
-  if (index <= 0) return;
-  const [layer] = psd.children.splice(index, 1);
-  psd.children.unshift(layer);
+  const pathParts = layerPath.split('/');
+  if (pathParts.length === 1) {
+    const targetName = pathParts[0];
+    const index = psd.children.findIndex((layer) => layer.name === targetName);
+    if (index <= 0) return;
+    const [layer] = psd.children.splice(index, 1);
+    psd.children.unshift(layer);
+    return;
+  }
+  const detach = (layers: Layer[] | undefined, parts: string[]): Layer | null => {
+    if (!layers?.length) return null;
+    const [head, ...tail] = parts;
+    const index = layers.findIndex((layer) => layer.name === head);
+    if (index < 0) return null;
+    if (tail.length === 0) {
+      const [layer] = layers.splice(index, 1);
+      return layer;
+    }
+    return detach(layers[index].children, tail);
+  };
+  const layer = detach(psd.children, pathParts);
+  if (layer) psd.children.unshift(layer);
 }
 
 function removeZmapPresetLayers(layers: Layer[] | undefined): Layer[] | undefined {
@@ -1082,7 +1146,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   ensureCanvasInitialized();
   const share = extractMeaegiShareId(input.share);
   const target = input.target ?? 'cape';
-  if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape, cape-balloon, or longcoat.`);
+  if (!isBakeTarget(target)) throw new Error(`Unknown target "${target}". Use one of: ${supportedBakeTargets.join(', ')}.`);
   const outDir = input.outDir ?? path.join('artifacts/whole-avatar-bake', share, target);
   const config = targetConfigs[target];
   logProgress(`loading MeAegi share ${share}`);
@@ -1148,7 +1212,12 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   logProgress('reading generated PSD back for validation');
   psd.children = undefined;
   const readback = readPsd(readFileSync(psdPath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
-  const readbackLayer = flatten(readback.children).find((entry) => entry.path === config.editLayerPath)?.layer;
+  const editLayerName = config.editLayerPath.split('/').at(-1);
+  const readbackLayer = flatten(readback.children).find((entry) =>
+    entry.path === config.editLayerPath ||
+    entry.path === editLayerName ||
+    (editLayerName ? entry.path.endsWith(`/${editLayerName}`) : false),
+  )?.layer;
   if (!readbackLayer?.imageData?.data) throw new Error('Readback layer imageData missing.');
   const readbackData = new Uint8ClampedArray(readbackLayer.imageData.data.buffer, readbackLayer.imageData.data.byteOffset, readbackLayer.imageData.data.byteLength);
   writeRgbaPng(path.join(outDir, 'readback-layer.png'), readbackLayer.imageData.width, readbackLayer.imageData.height, readbackData);

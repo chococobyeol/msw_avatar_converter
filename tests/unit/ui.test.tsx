@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { JSDOM } from 'jsdom';
 import { render, fireEvent } from '@testing-library/react';
-import { App, buildWholeAvatarBakeUrl } from '../../src/App.js';
+import { App, buildMappedPartBakePayload, buildWholeAvatarBakeUrl } from '../../src/App.js';
 import { buildMeaegiShareImport, extractMeaegiShareId, parseMeaegiFlight } from '../../src/meaegiShare.js';
 import { computeSampleValidation, sampleParts } from '../../src/sample.js';
 
@@ -64,6 +64,18 @@ test('whole-avatar bake URL carries current selected source parts', () => {
   assert.equal(url.searchParams.get('target'), 'cape');
   assert.equal(url.searchParams.get('format'), 'json');
   assert.equal(url.searchParams.get('parts'), 'hair,weapon');
+});
+
+test('mapped part bake payload sends only confirmed user mappings', () => {
+  const payload = buildMappedPartBakePayload('SHARE123', [
+    { partId: 'hair', targetPartId: 'cape', mode: 'part', groupId: '', confirmed: true },
+    { partId: 'weapon', targetPartId: 'gloves', mode: 'group', groupId: 'weapon-bundle', confirmed: true },
+    { partId: 'skin', targetPartId: 'longcoat', mode: 'part', groupId: '', confirmed: false },
+  ]);
+  assert.equal(payload.share, 'SHARE123');
+  assert.deepEqual(payload.mappings.map((mapping) => mapping.partId), ['hair', 'weapon']);
+  assert.equal(payload.mappings[1].targetPartId, 'gloves');
+  assert.equal(payload.mappings[1].groupId, 'weapon-bundle');
 });
 
 test('sample validation rejects invalid aggregate mapping semantics', () => {

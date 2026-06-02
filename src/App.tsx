@@ -3,7 +3,7 @@ import { CheckCircle2, Download, Eye, FileText, Layers, Wand2, XCircle } from 'l
 import { computeUiValidation, defaultTargetForSourcePart, sampleFrames, sampleParts, targetParts, type UiFrame, type UiMappingInput, type UiPart } from './sample.js';
 
 type MappingMode = 'part' | 'group' | 'whole-avatar';
-type WholeAvatarBakeTarget = 'cape' | 'cape-balloon' | 'longcoat';
+type WholeAvatarBakeTarget = 'cape' | 'cape-balloon' | 'longcoat' | 'gloves' | 'pants' | 'shoes';
 
 export function buildWholeAvatarBakeUrl(share: string, target: WholeAvatarBakeTarget, selectedPartIds: string[]): string {
   const params = new URLSearchParams({
@@ -13,6 +13,21 @@ export function buildWholeAvatarBakeUrl(share: string, target: WholeAvatarBakeTa
     parts: selectedPartIds.join(','),
   });
   return `/api/bake-meaegi?${params.toString()}`;
+}
+
+export function buildMappedPartBakePayload(share: string, mappings: UiMappingInput[]) {
+  return {
+    share,
+    mappings: mappings
+      .filter((mapping) => mapping.confirmed)
+      .map((mapping) => ({
+        partId: mapping.partId,
+        targetPartId: mapping.targetPartId,
+        mode: mapping.mode,
+        groupId: mapping.groupId,
+        confirmed: mapping.confirmed,
+      })),
+  };
 }
 
 interface UiMapping extends UiMappingInput {
@@ -107,6 +122,28 @@ interface BakeResult {
   };
 }
 
+interface MappedBakeResult {
+  ok: boolean;
+  share: string;
+  runDir: string;
+  exportedGroups: number;
+  failedGroups: number;
+  files?: { manifest: string };
+  results: Array<{
+    ok: boolean;
+    group: {
+      key: string;
+      target: string;
+      mode: MappingMode;
+      groupId: string;
+      partIds: string[];
+    };
+    error?: string;
+    report?: BakeResult['report'];
+    files?: BakeResult['files'];
+  }>;
+}
+
 interface RedDotMeasurementResult {
   pass: boolean;
   comparedFrames: number;
@@ -190,6 +227,8 @@ export function App() {
   const [exportStatus, setExportStatus] = useState('not exported');
   const [bakeStatus, setBakeStatus] = useState('whole-avatar PSD not baked');
   const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
+  const [mappedBakeStatus, setMappedBakeStatus] = useState('mapped part PSD not baked');
+  const [mappedBakeResult, setMappedBakeResult] = useState<MappedBakeResult | null>(null);
   const [currentBakeTarget, setCurrentBakeTarget] = useState<WholeAvatarBakeTarget | null>(null);
   const [adjustedRedDotFile, setAdjustedRedDotFile] = useState<File | null>(null);
   const [redDotMeasureStatus, setRedDotMeasureStatus] = useState('red-dot 비교 파일 없음');
@@ -365,6 +404,43 @@ export function App() {
     }
   };
 
+  const convertMappedPartPsds = async () => {
+    const share = importedSource?.share ?? importJson.trim();
+    if (!share) {
+      setMappedBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
+      return;
+    }
+    if (!validation.pass) {
+      setMappedBakeStatus('모든 매핑을 확인해야 파트별 PSD export를 실행할 수 있습니다.');
+      return;
+    }
+    const payload = buildMappedPartBakePayload(share, mappings);
+    setMappedBakeStatus(`mapping groups converting: ${payload.mappings.length} confirmed row(s)...`);
+    setMappedBakeResult(null);
+    try {
+      const response = await fetch('/api/bake-meaegi-mapped', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const result = body as MappedBakeResult;
+      setMappedBakeResult(result);
+      setMappedBakeStatus(`mapped export done: exported=${result.exportedGroups}, failed=${result.failedGroups}`);
+      setImportLog((current) => [
+        `POST /api/bake-meaegi-mapped -> HTTP ${response.status}`,
+        `mappedExport exported=${result.exportedGroups} failed=${result.failedGroups} manifest=${result.files?.manifest ?? '-'}`,
+        ...result.results.map((entry) => `mappedGroup ${entry.ok ? 'ok' : 'fail'} target=${entry.group.target} mode=${entry.group.mode} group=${entry.group.groupId} parts=${entry.group.partIds.join(',')} ${entry.error ? `error=${entry.error}` : `psd=${entry.report?.outputPsd ?? '-'}`}`),
+        ...current,
+      ]);
+    } catch (error) {
+      const message = `mapped part bake failed: ${(error as Error).message}`;
+      setMappedBakeStatus(message);
+      setImportLog((current) => [message, ...current]);
+    }
+  };
+
   const compareAdjustedRedDots = async () => {
     if (!bakeResult?.files.redDots?.templateGuideSheet) {
       setRedDotMeasureStatus('먼저 red-dot bake 결과를 생성해야 합니다.');
@@ -471,6 +547,9 @@ export function App() {
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape')}>Cape 변환 + GIF 비교 생성</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape-balloon')}>Cape Balloon 변환 + GIF 비교 생성</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('longcoat')}>Longcoat 변환 + GIF 비교 생성</button>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('gloves')}>Gloves 변환 + GIF 비교 생성</button>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('pants')}>Pants 변환 + GIF 비교 생성</button>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('shoes')}>Shoes 변환 + GIF 비교 생성</button>
           <span aria-label="bake-status">{bakeStatus}</span>
         </div>
         {bakeResult ? (
@@ -607,6 +686,7 @@ export function App() {
 
       <section className="panel">
         <h2><Layers size={18} /> Every-part Mapping</h2>
+        <p className="muted">파트별 export는 확인된 mapping row를 target+group 기준으로 묶어서 PSD를 각각 생성합니다. 현재 full-motion sheet로 바로 검증 가능한 target은 cape / cape-balloon / longcoat / gloves / pants / shoes입니다.</p>
         <div className="table">
           <div className="row head"><span>Source part</span><span>Target MSW part</span><span>Mode</span><span>Group</span><span>Confirmed</span></div>
           {parts.map((part) => {
@@ -634,8 +714,37 @@ export function App() {
         <div className="toolbar">
           <button onClick={confirmAll}>추천 매핑 전체 확인</button>
           <button onClick={bakeWholeAvatarToCape}>전체 아바타를 cape 한 파트로 굽기</button>
+          <button disabled={!importedSource?.share || !validation.pass} onClick={convertMappedPartPsds}>확인된 매핑대로 PSD 시트 생성</button>
+          <span aria-label="mapped-bake-status">{mappedBakeStatus}</span>
           <span>{grouped.length} grouped/whole-avatar mappings configured</span>
         </div>
+        {mappedBakeResult ? (
+          <div className="bake-result">
+            <div className={`red-dot-summary ${mappedBakeResult.ok ? 'pass' : 'fail'}`}>
+              <strong>Mapped PSD export</strong>
+              <span>exported={mappedBakeResult.exportedGroups}</span>
+              <span>failed={mappedBakeResult.failedGroups}</span>
+              {mappedBakeResult.files?.manifest ? <a href={mappedBakeResult.files.manifest} target="_blank" rel="noreferrer">mapped-bake-manifest.json</a> : null}
+            </div>
+            <div className="mapped-results">
+              {mappedBakeResult.results.map((entry) => (
+                <div key={entry.group.key} className={`mapped-result ${entry.ok ? 'pass' : 'fail'}`}>
+                  <strong>{entry.group.target} · {entry.group.mode} · {entry.group.groupId}</strong>
+                  <small>parts={entry.group.partIds.join(', ')}</small>
+                  {entry.ok && entry.files ? (
+                    <div className="artifact-links">
+                      <a href={entry.files.psd} download={entry.files.psdDownloadName ?? true}>PSD 다운로드</a>
+                      <a href={entry.files.report} target="_blank" rel="noreferrer">report</a>
+                      <a href={entry.files.expectedSheet} target="_blank" rel="noreferrer">source sheet</a>
+                      <a href={entry.files.convertedEditableSheet} target="_blank" rel="noreferrer">converted sheet</a>
+                      <a href={entry.files.diff} target="_blank" rel="noreferrer">diff</a>
+                    </div>
+                  ) : <em>{entry.error}</em>}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="grid two" style={previewStyle}>

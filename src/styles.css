@@ -29,6 +29,11 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .gif-card { display: grid; gap: 6px; overflow: hidden; }
 .gif-card small { color: #94a3b8; }
 .gif-card img { width: 100%; height: auto; border-radius: 8px; image-rendering: pixelated; background: #0f172a; }
+.mapped-results { display: grid; gap: 10px; margin-top: 12px; }
+.mapped-result { display: grid; gap: 6px; padding: 12px; border: 1px solid #334155; background: #020617; border-radius: 12px; }
+.mapped-result.pass { border-color: #22c55e; }
+.mapped-result.fail { border-color: #ef4444; }
+.mapped-result small, .mapped-result em { color: #94a3b8; }
 .red-dot-panel { margin-top: 18px; padding: 14px; border: 1px solid #7f1d1d; background: #1f0f14; border-radius: 16px; }
 .red-dot-panel h3 { margin: 0 0 8px; color: #fecaca; }
 .red-dot-summary { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; padding: 10px; border-radius: 12px; border: 1px solid #334155; background: #020617; }
