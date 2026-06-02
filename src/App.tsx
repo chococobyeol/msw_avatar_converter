@@ -3,7 +3,7 @@ import { CheckCircle2, Download, Eye, FileText, Layers, Wand2, XCircle } from 'l
 import { computeUiValidation, defaultTargetForSourcePart, sampleFrames, sampleParts, targetParts, type UiFrame, type UiMappingInput, type UiPart } from './sample.js';
 
 type MappingMode = 'part' | 'group' | 'whole-avatar';
-type WholeAvatarBakeTarget = 'cape' | 'cape-balloon' | 'longcoat' | 'gloves' | 'pants' | 'shoes';
+type WholeAvatarBakeTarget = typeof targetParts[number];
 
 export function buildWholeAvatarBakeUrl(share: string, target: WholeAvatarBakeTarget, selectedPartIds: string[]): string {
   const params = new URLSearchParams({
@@ -229,6 +229,7 @@ export function App() {
   const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
   const [mappedBakeStatus, setMappedBakeStatus] = useState('mapped part PSD not baked');
   const [mappedBakeResult, setMappedBakeResult] = useState<MappedBakeResult | null>(null);
+  const [selectedBakeTarget, setSelectedBakeTarget] = useState<WholeAvatarBakeTarget>('cape');
   const [currentBakeTarget, setCurrentBakeTarget] = useState<WholeAvatarBakeTarget | null>(null);
   const [adjustedRedDotFile, setAdjustedRedDotFile] = useState<File | null>(null);
   const [redDotMeasureStatus, setRedDotMeasureStatus] = useState('red-dot 비교 파일 없음');
@@ -544,6 +545,10 @@ export function App() {
         <h2><Download size={18} /> Whole-avatar PSD Bake</h2>
         <p className="muted">변환 버튼은 바로 다운로드하지 않습니다. 먼저 PSD를 만들고, MeAegi input / Original template / Converted PSD 3열 모션 GIF를 생성해서 위치를 눈으로 검증하게 합니다.</p>
         <div className="toolbar">
+          <select value={selectedBakeTarget} onChange={(event) => setSelectedBakeTarget(event.target.value as WholeAvatarBakeTarget)} aria-label="whole-bake-target">
+            {targetParts.map((target) => <option key={target} value={target}>{target}</option>)}
+          </select>
+          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd(selectedBakeTarget)}>선택 target 변환 + 검증</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape')}>Cape 변환 + GIF 비교 생성</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape-balloon')}>Cape Balloon 변환 + GIF 비교 생성</button>
           <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('longcoat')}>Longcoat 변환 + GIF 비교 생성</button>
@@ -686,7 +691,7 @@ export function App() {
 
       <section className="panel">
         <h2><Layers size={18} /> Every-part Mapping</h2>
-        <p className="muted">파트별 export는 확인된 mapping row를 target+group 기준으로 묶어서 PSD를 각각 생성합니다. 현재 full-motion sheet로 바로 검증 가능한 target은 cape / cape-balloon / longcoat / gloves / pants / shoes입니다.</p>
+        <p className="muted">파트별 export는 확인된 mapping row를 target+group 기준으로 묶어서 PSD를 각각 생성합니다. 2750x3500 motion-grid 계열과 300x180 cap/hair compact-slot 계열 모두 실제 PSD 레이어에 쓰고 readback diff로 검증합니다.</p>
         <div className="table">
           <div className="row head"><span>Source part</span><span>Target MSW part</span><span>Mode</span><span>Group</span><span>Confirmed</span></div>
           {parts.map((part) => {

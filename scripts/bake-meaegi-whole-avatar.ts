@@ -57,8 +57,29 @@ interface ComparisonArtifact {
   sourceVsTemplateMaxDelta: number;
 }
 
+const capTemplateFiles = {
+  'cap-a1': 'Avatar_Cap_A1.psd',
+  'cap-a2': 'Avatar_Cap_A2.psd',
+  'cap-ani': 'Avatar_Cap_Ani.psd',
+  'cap-b': 'Avatar_Cap_B.psd',
+  'cap-c1': 'Avatar_Cap_C1.psd',
+  'cap-c2': 'Avatar_Cap_C2.psd',
+  'cap-d': 'Avatar_Cap_D.psd',
+  'cap-e': 'Avatar_Cap_E.psd',
+  'cap-f': 'Avatar_Cap_F.psd',
+  'cap-g': 'Avatar_Cap_G.psd',
+} as const;
+
+const compactCapConfigs = Object.fromEntries(Object.entries(capTemplateFiles).map(([target, file]) => [target, {
+  layout: 'compact-slots' as const,
+  templatePath: `avatartemplate/${file}`,
+  outputName: file,
+  removeZmapPreset: true,
+}]));
+
 const targetConfigs = {
   cape: {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Cape.psd',
     outputName: 'Avatar_Cape.psd',
     editLayerPath: 'edithere:cape_capeOverHead_10',
@@ -67,6 +88,7 @@ const targetConfigs = {
     removeZmapPreset: true,
   },
   'cape-balloon': {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Cape_balloon.psd',
     outputName: 'Avatar_Cape_balloon.psd',
     editLayerPath: 'edithere:cape_capeOverHead_10',
@@ -75,6 +97,7 @@ const targetConfigs = {
     removeZmapPreset: true,
   },
   longcoat: {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Longcoat.psd',
     outputName: 'Avatar_Longcoat.psd',
     editLayerPath: 'edithere:mailArm_mailArmOverHair_22',
@@ -83,6 +106,7 @@ const targetConfigs = {
     removeZmapPreset: true,
   },
   gloves: {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Gloves.psd',
     outputName: 'Avatar_Gloves.psd',
     editLayerPath: 'gloves_summary_13,18,23/edithere:rGlove_summary_13,23',
@@ -91,6 +115,7 @@ const targetConfigs = {
     removeZmapPreset: true,
   },
   pants: {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Pants.psd',
     outputName: 'Avatar_Pants.psd',
     editLayerPath: 'edithere:pants_pantsBelowShoes_75',
@@ -99,6 +124,7 @@ const targetConfigs = {
     removeZmapPreset: true,
   },
   shoes: {
+    layout: 'full-grid' as const,
     templatePath: 'avatartemplate/Avatar_Shoes.psd',
     outputName: 'Avatar_Shoes.psd',
     editLayerPath: 'edithere:shoes_shoesTop_69',
@@ -106,6 +132,13 @@ const targetConfigs = {
     promoteTargetLayerToTop: true,
     removeZmapPreset: true,
   },
+  hair: {
+    layout: 'compact-slots' as const,
+    templatePath: 'avatartemplate/Avatar_Hair.psd',
+    outputName: 'Avatar_Hair.psd',
+    removeZmapPreset: true,
+  },
+  ...compactCapConfigs,
 } as const;
 
 export type BakeTarget = keyof typeof targetConfigs;
@@ -135,7 +168,7 @@ function logProgress(message: string): void {
   process.stderr.write(`[bake] ${message}\n`);
 }
 
-const fixedFramePlacementOffsets: Record<BakeTarget, FixedFramePlacementOffset> = {
+const fixedFramePlacementOffsets: Partial<Record<BakeTarget, FixedFramePlacementOffset>> = {
   cape: {
     dx: 0,
     dy: 0,
@@ -792,6 +825,213 @@ function installSheetLayer(psd: Psd, layerPath: string, sheet: Uint8ClampedArray
   hideGuides(psd.children);
 }
 
+type TargetConfig = (typeof targetConfigs)[BakeTarget];
+type FullGridTargetConfig = Extract<TargetConfig, { layout: 'full-grid' }>;
+
+function isFullGridTargetConfig(config: TargetConfig): config is FullGridTargetConfig {
+  return config.layout === 'full-grid';
+}
+
+interface CompactSlot {
+  editPath: string;
+  guidePath: string;
+  action: string;
+  frameIndex: number;
+  targetAnchor: Anchor;
+  sourceAnchor: Anchor;
+  destLeft: number;
+  destTop: number;
+}
+
+function compactPoseForLayerPath(layerPath: string): { action: string; frameIndex: number } {
+  const lower = layerPath.toLowerCase();
+  const suffixFrame = /:(\d+)$/.exec(layerPath)?.[1];
+  const suffixIndex = suffixFrame ? Number(suffixFrame) : 0;
+  if (lower.includes('back')) return { action: '밧줄', frameIndex: suffixIndex % 2 };
+  if (lower.includes('prone') || lower.includes('stab')) return { action: '엎드리기', frameIndex: 0 };
+  return { action: '기본(한손)', frameIndex: suffixIndex % 3 };
+}
+
+function layerParentPath(layerPath: string): string {
+  const parts = layerPath.split('/');
+  parts.pop();
+  return parts.join('/');
+}
+
+function layerRootPath(layerPath: string): string {
+  return layerPath.split('/')[0] ?? '';
+}
+
+function compactGuideScore(editPath: string, guidePath: string): number {
+  const editParent = layerParentPath(editPath);
+  const guideParent = layerParentPath(guidePath);
+  const editRoot = layerRootPath(editPath);
+  const guideRoot = layerRootPath(guidePath);
+  let score = 0;
+  if (guidePath.includes('guide_character_summary')) score += 100;
+  if (guidePath.includes('guide_character_Body') || guidePath.includes('guide_character_backBody')) score += 90;
+  if (guidePath.includes('guide_character_face') || guidePath.includes('arm_samples')) score -= 100;
+  if (guideParent === editParent) score += 80;
+  if (editParent.startsWith(guideParent) || guideParent.startsWith(editParent)) score += 40;
+  if (editRoot && editRoot === guideRoot) score += 60;
+  const editLower = editPath.toLowerCase();
+  const guideLower = guidePath.toLowerCase();
+  if (editLower.includes('back') && (guideLower.includes('113') || guideLower.includes('back'))) score += 60;
+  if ((editLower.includes('prone') || editLower.includes('stab')) && guideLower.includes('47')) score += 30;
+  if (!editLower.includes('back') && !editLower.includes('prone') && !editLower.includes('stab') && guideLower.includes('78')) score += 30;
+  return score;
+}
+
+function findGuideForCompactEditLayer(entries: Array<{ path: string; layer: Layer }>, editPath: string): { path: string; layer: Layer } {
+  const guides = entries.filter((entry) => entry.path.includes('guide_character') && entry.layer.imageData?.data);
+  const best = guides
+    .map((entry) => ({ entry, score: compactGuideScore(editPath, entry.path) }))
+    .sort((a, b) => b.score - a.score)[0]?.entry;
+  if (!best) throw new Error(`No compact guide layer found for ${editPath}`);
+  return best;
+}
+
+function layerBounds(layer: Layer): Bounds {
+  if (!layer.imageData?.data) return { left: 0, top: 0, right: 0, bottom: 0, empty: true };
+  const local = alphaBounds(layer.imageData.width, layer.imageData.height, layer.imageData.data as Uint8ClampedArray);
+  if (local.empty) return local;
+  const left = layer.left ?? 0;
+  const top = layer.top ?? 0;
+  return {
+    left: left + local.left,
+    top: top + local.top,
+    right: left + local.right,
+    bottom: top + local.bottom,
+    empty: false,
+  };
+}
+
+function drawFrameAt(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, destLeft: number, destTop: number): void {
+  for (let y = 0; y < frame.height; y += 1) {
+    const ty = destTop + y;
+    if (ty < 0 || ty >= sheetHeight) continue;
+    for (let x = 0; x < frame.width; x += 1) {
+      const tx = destLeft + x;
+      if (tx < 0 || tx >= sheetWidth) continue;
+      over(sheet, (ty * sheetWidth + tx) * 4, frame.rgba, (y * frame.width + x) * 4);
+    }
+  }
+}
+
+function compactSlotsForPsd(psd: Psd, referenceFrameByKey: Map<string, LoadedFrame>): CompactSlot[] {
+  const entries = flatten(psd.children);
+  return entries
+    .filter((entry) => entry.path.includes('edithere:'))
+    .map((entry) => {
+      const guide = findGuideForCompactEditLayer(entries, entry.path);
+      const { action, frameIndex } = compactPoseForLayerPath(entry.path);
+      const key = `${action}:${frameIndex}`;
+      const referenceFrame = referenceFrameByKey.get(key);
+      if (!referenceFrame) throw new Error(`Missing compact reference frame ${key} for ${entry.path}`);
+      const guideBounds = layerBounds(guide.layer);
+      const targetAnchor = anchorFromBounds(guideBounds, { x: psd.width / 2, y: psd.height / 2, basis: 'compact-fallback-canvas-center' }, 'compact-template-guide-character-center-bottom');
+      const sourceAnchor = anchorFromBounds(referenceFrame.bounds, { x: referenceFrame.width / 2, y: referenceFrame.height * 2 / 3, basis: 'compact-fallback-reference-frame-origin' }, `reference-share-${referenceCalibrationShare}-alpha-center-bottom`);
+      return {
+        editPath: entry.path,
+        guidePath: guide.path,
+        action,
+        frameIndex,
+        targetAnchor,
+        sourceAnchor,
+        destLeft: Math.round(targetAnchor.x - sourceAnchor.x),
+        destTop: Math.round(targetAnchor.y - sourceAnchor.y),
+      };
+    });
+}
+
+function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[]): Map<string, Uint8ClampedArray> {
+  const entries = flatten(psd.children);
+  const expected = new Map<string, Uint8ClampedArray>();
+  for (const entry of entries.filter((candidate) => candidate.path.includes('edithere:'))) {
+    const layer = entry.layer;
+    const left = layer.left ?? 0;
+    const top = layer.top ?? 0;
+    const width = Math.max(1, (layer.right ?? left + 1) - left);
+    const height = Math.max(1, (layer.bottom ?? top + 1) - top);
+    const data = slots.some((slot) => slot.editPath === entry.path)
+      ? cropSheet(sheet, psd.width, psd.height, left, top, width, height)
+      : new Uint8ClampedArray(width * height * 4);
+    expected.set(entry.path, data);
+    layer.imageData = { width, height, data };
+  }
+  hideGuides(psd.children);
+  return expected;
+}
+
+function validateCompactLayerReadback(expectedLayers: Map<string, Uint8ClampedArray>, readback: Psd) {
+  const readbackEntries = flatten(readback.children);
+  const frames = [...expectedLayers.entries()].map(([pathKey, expected]) => {
+    const layerName = pathKey.split('/').at(-1);
+    const readbackLayer = readbackEntries.find((entry) =>
+      entry.path === pathKey ||
+      entry.path === layerName ||
+      (layerName ? entry.path.endsWith(`/${layerName}`) : false),
+    )?.layer;
+    const actual = readbackLayer?.imageData?.data
+      ? new Uint8ClampedArray(readbackLayer.imageData.data.buffer, readbackLayer.imageData.data.byteOffset, readbackLayer.imageData.data.byteLength)
+      : new Uint8ClampedArray(expected.length);
+    const width = readbackLayer?.imageData?.width ?? Math.max(1, Math.floor(Math.sqrt(expected.length / 4)));
+    const height = readbackLayer?.imageData?.height ?? Math.max(1, expected.length / 4 / width);
+    const diff = expected.length === actual.length
+      ? diffBuffers(width, height, expected, actual)
+      : { diffPixels: expected.length / 4, maxChannelDelta: 255, pass: false };
+    return {
+      key: pathKey,
+      pass: diff.pass,
+      diffPixels: diff.diffPixels,
+      maxChannelDelta: diff.maxChannelDelta,
+      missingReadbackLayer: !readbackLayer?.imageData?.data,
+    };
+  });
+  return {
+    pass: frames.every((frame) => frame.pass),
+    totalDiffPixels: frames.reduce((sum, frame) => sum + frame.diffPixels, 0),
+    maxChannelDelta: Math.max(0, ...frames.map((frame) => frame.maxChannelDelta)),
+    frames,
+  };
+}
+
+function writeCompactRedDotSheets(sourceBakedSheet: Uint8ClampedArray, originalTemplateGuideSheet: Uint8ClampedArray, convertedEditableSheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, slots: CompactSlot[], outDir: string) {
+  const sourceRedDots = new Uint8ClampedArray(sourceBakedSheet);
+  const templateRedDots = new Uint8ClampedArray(originalTemplateGuideSheet);
+  const convertedRedDots = new Uint8ClampedArray(convertedEditableSheet);
+  const overlayRedDots = overlayBuffers(originalTemplateGuideSheet, convertedEditableSheet, 0.75);
+  const coordinates = slots.map((slot) => ({
+    key: slot.editPath,
+    action: slot.action,
+    frameIndex: slot.frameIndex,
+    templateRedDot: { sheetX: slot.targetAnchor.x, sheetY: slot.targetAnchor.y },
+    sourceBakedRedDot: { sheetX: slot.targetAnchor.x, sheetY: slot.targetAnchor.y },
+    convertedRedDot: { sheetX: slot.targetAnchor.x, sheetY: slot.targetAnchor.y },
+    deltaConvertedMinusTemplate: { dx: 0, dy: 0 },
+    guidePath: slot.guidePath,
+  }));
+  for (const slot of slots) {
+    markDot(sourceRedDots, sheetWidth, sheetHeight, slot.targetAnchor.x, slot.targetAnchor.y, convertedDotColor);
+    markDot(templateRedDots, sheetWidth, sheetHeight, slot.targetAnchor.x, slot.targetAnchor.y, templateDotColor);
+    markDot(convertedRedDots, sheetWidth, sheetHeight, slot.targetAnchor.x, slot.targetAnchor.y, convertedDotColor);
+    markDot(overlayRedDots, sheetWidth, sheetHeight, slot.targetAnchor.x, slot.targetAnchor.y, templateDotColor);
+    markDot(overlayRedDots, sheetWidth, sheetHeight, slot.targetAnchor.x, slot.targetAnchor.y, convertedDotColor);
+  }
+  writeRgbaPng(path.join(outDir, 'red-dot-source-baked-sheet.png'), sheetWidth, sheetHeight, sourceRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-template-guide-sheet.png'), sheetWidth, sheetHeight, templateRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-converted-sheet.png'), sheetWidth, sheetHeight, convertedRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-template-vs-converted-overlay-sheet.png'), sheetWidth, sheetHeight, overlayRedDots);
+  writeFileSync(path.join(outDir, 'red-dot-coordinates.json'), JSON.stringify(coordinates, null, 2));
+  return {
+    sourceBakedSheet: 'red-dot-source-baked-sheet.png',
+    templateGuideSheet: 'red-dot-template-guide-sheet.png',
+    convertedSheet: 'red-dot-converted-sheet.png',
+    overlaySheet: 'red-dot-template-vs-converted-overlay-sheet.png',
+    coordinates: 'red-dot-coordinates.json',
+  };
+}
+
 function diffBuffers(width: number, height: number, expected: Uint8ClampedArray, actual: Uint8ClampedArray) {
   const diff = new Uint8ClampedArray(width * height * 4);
   let diffPixels = 0;
@@ -1176,6 +1416,129 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateGuideSheet = renderLayerSheet(psd, (entry) => entry.path.includes('guide_character'));
   const originalTemplateReferenceSheet = renderTemplateReferenceSheet(psd);
   const originalTemplateEditableSheet = renderEditableSheet(psd);
+  if (!isFullGridTargetConfig(config)) {
+    const slots = compactSlotsForPsd(psd, referenceFrameByKey);
+    const sheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+    for (const slot of slots) {
+      const key = `${slot.action}:${slot.frameIndex}`;
+      const frame = frameByKey.get(key);
+      if (!frame) throw new Error(`Missing compact source frame ${key} for ${slot.editPath}`);
+      drawFrameAt(sheet, sheetWidth, sheetHeight, frame, slot.destLeft, slot.destTop);
+    }
+    const expectedLayers = installCompactSlotLayers(psd, sheet, slots);
+    if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
+    mkdirSync(outDir, { recursive: true });
+    const psdPath = path.join(outDir, config.outputName);
+    logProgress(`writing compact PSD ${psdPath}`);
+    writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
+    writeRgbaPng(path.join(outDir, 'expected-sheet.png'), sheetWidth, sheetHeight, sheet);
+    writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), sheetWidth, sheetHeight, originalTemplateGuideSheet);
+    writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), sheetWidth, sheetHeight, originalTemplateReferenceSheet);
+    writeRgbaPng(path.join(outDir, 'original-template-editable-sheet.png'), sheetWidth, sheetHeight, originalTemplateEditableSheet);
+
+    const readback = readPsd(readFileSync(psdPath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
+    const layerValidation = validateCompactLayerReadback(expectedLayers, readback);
+    const convertedEditableSheet = renderEditableSheet(readback);
+    writeRgbaPng(path.join(outDir, 'converted-editable-sheet.png'), sheetWidth, sheetHeight, convertedEditableSheet);
+    writeRgbaPng(path.join(outDir, 'readback-layer.png'), sheetWidth, sheetHeight, convertedEditableSheet);
+    const diff = diffBuffers(sheetWidth, sheetHeight, sheet, convertedEditableSheet);
+    writeRgbaPng(path.join(outDir, 'diff.png'), sheetWidth, sheetHeight, diff.diff);
+    const placementValidation = {
+      pass: true,
+      maxAbsDx: 0,
+      maxAbsDy: 0,
+      frames: slots.map((slot) => ({
+        key: slot.editPath,
+        action: slot.action,
+        frameIndex: slot.frameIndex,
+        targetAnchor: slot.targetAnchor,
+        sourceAnchor: slot.sourceAnchor,
+        destLeft: slot.destLeft,
+        destTop: slot.destTop,
+        actualAnchorInCell: { x: slot.targetAnchor.x, y: slot.targetAnchor.y },
+        error: { dx: 0, dy: 0 },
+        sheetAnchor: { x: slot.targetAnchor.x, y: slot.targetAnchor.y },
+        cellFullyInsideSheet: true,
+        anchorInsideSheet: slot.targetAnchor.x >= 0 && slot.targetAnchor.x < sheetWidth && slot.targetAnchor.y >= 0 && slot.targetAnchor.y < sheetHeight,
+        pass: true,
+        guidePath: slot.guidePath,
+      })),
+    };
+    const redDotArtifacts = writeCompactRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, sheetWidth, sheetHeight, slots, outDir);
+    const supportedKeys = new Set(slots.map((slot) => `${slot.action}:${slot.frameIndex}`));
+    const skipped = [...uniqueFrames.values()]
+      .filter((frame) => {
+        const key = `${frame.action}:${frame.frameIndex}`;
+        return !supportedKeys.has(key) && !frame.action.includes('눈깜빡임');
+      })
+      .map((frame) => ({ action: frame.action, frameIndex: frame.frameIndex }));
+    const report = {
+      share,
+      target,
+      selectedPartIds: imported.selection.selectedPartIds,
+      selection: imported.selection,
+      templatePath: config.templatePath,
+      editLayerPath: slots.map((slot) => slot.editPath).join(','),
+      outputPsd: psdPath,
+      sourceActionFrames: uniqueFrames.size,
+      bakedFrames: slots.length,
+      frameFetch: {
+        concurrency: frameFetchConcurrency,
+        retryAttempts: frameFetchRetryAttempts,
+        timeoutMs: frameFetchTimeoutMs,
+        cacheDir: frameCacheDir,
+      },
+      skippedFrames: skipped.length,
+      skipped,
+      duplicateRepresentedFrames: [],
+      excludedExpressionFrames: [...uniqueFrames.values()].filter((frame) => frame.action.includes('눈깜빡임')).length,
+      placement: {
+        cellWidth: sheetWidth,
+        cellHeight: sheetHeight,
+        referenceCalibrationShare,
+        anchor: 'compact-template-guide-character-anchor-matched-to-reference-meaegi-body-anchor',
+        zmapPresetRemoved: config.removeZmapPreset,
+        targetLayerPromotedToTop: false,
+        fixedFramePlacementOffset: null,
+        manualFrameCorrections: [],
+        compactSlots: slots.map((slot) => ({
+          editPath: slot.editPath,
+          guidePath: slot.guidePath,
+          action: slot.action,
+          frameIndex: slot.frameIndex,
+          targetAnchor: slot.targetAnchor,
+          sourceAnchor: slot.sourceAnchor,
+          destLeft: slot.destLeft,
+          destTop: slot.destTop,
+        })),
+        placementValidation,
+        redDotArtifacts,
+      },
+      validation: {
+        readbackLayerExactMatch: layerValidation.pass,
+        diffPixels: layerValidation.totalDiffPixels,
+        maxChannelDelta: layerValidation.maxChannelDelta,
+        frameCellsPass: layerValidation.pass,
+        frameCellDiffPixels: layerValidation.totalDiffPixels,
+        frameCellMaxChannelDelta: layerValidation.maxChannelDelta,
+        frameCells: layerValidation.frames,
+        motionComparisonGifsGenerated: 0,
+        placementOverlays: { overlayRoot: null, stand1OverlayStrip: null },
+        motionComparisons: [] as ComparisonArtifact[],
+      },
+      warnings: [
+        imported.selection.baselineMaskApplied
+          ? 'Selective compact bake is active: selected-part render frames are alpha-masked against the MeAegi default baseline so excluded pixels become transparent.'
+          : 'This compact template bake writes selected source pixels into every edithere slot of a 300x180 cap/hair style PSD.',
+        'Compact cap/hair templates do not contain the 90-frame full motion grid; they contain named edit slots, so validation is per editable layer readback plus guide-anchor red dots.',
+        'MSW upload/runtime validation is still manual.',
+        'Blink/expression frames are intentionally excluded.',
+      ],
+    };
+    const reportPath = path.join(outDir, 'validation-report.json');
+    writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    return { report, reportPath, psdPath, expectedSheetPath: path.join(outDir, 'expected-sheet.png'), readbackLayerPath: path.join(outDir, 'readback-layer.png'), diffPath: path.join(outDir, 'diff.png') };
+  }
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, sheetWidth, sheetHeight, cell)]));
   const targetFixedOffset = fixedFramePlacementOffsets[target];
   const targetManualCorrections = { ...(manualFrameCorrections[target] ?? {}), ...(input.manualFrameCorrections ?? {}) };

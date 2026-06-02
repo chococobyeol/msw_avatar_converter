@@ -236,7 +236,7 @@ function meaegiSharePlugin(): Plugin {
               results.push({
                 ok: false,
                 group,
-                error: `target "${group.target}" is not a full-motion PSD bake target yet. Use cape, cape-balloon, longcoat, gloves, pants, or shoes for mapped motion-sheet export.`,
+                error: `target "${group.target}" is not a supported PSD bake target. Use one of the targetParts options, including cape/cape-balloon/longcoat/gloves/pants/shoes/hair/cap-*.`,
               });
               continue;
             }
