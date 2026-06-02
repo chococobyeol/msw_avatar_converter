@@ -231,8 +231,8 @@ function correctionKey(cell: Pick<BakedCell, 'action' | 'frameIndex'>): string {
 function anchorFromBounds(bounds: Bounds | undefined, fallback: Anchor, basis: string): Anchor {
   if (!bounds || bounds.empty) return fallback;
   return {
-    x: (bounds.left + bounds.right) / 2,
-    y: bounds.bottom,
+    x: Math.round((bounds.left + bounds.right - 1) / 2),
+    y: bounds.bottom - 1,
     basis,
   };
 }
@@ -486,6 +486,63 @@ function overlayBuffers(base: Uint8ClampedArray, overlay: Uint8ClampedArray, ove
   return out;
 }
 
+function markRedDot(buffer: Uint8ClampedArray, width: number, height: number, x: number, y: number, color: [number, number, number, number] = [255, 0, 0, 255]): void {
+  const px = Math.round(x);
+  const py = Math.round(y);
+  const points = [
+    [px, py],
+    [px - 1, py],
+    [px + 1, py],
+    [px, py - 1],
+    [px, py + 1],
+  ];
+  for (const [dotX, dotY] of points) {
+    if (dotX < 0 || dotX >= width || dotY < 0 || dotY >= height) continue;
+    const offset = (dotY * width + dotX) * 4;
+    buffer[offset] = color[0];
+    buffer[offset + 1] = color[1];
+    buffer[offset + 2] = color[2];
+    buffer[offset + 3] = color[3];
+  }
+}
+
+function markCellRedDot(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, cell: BakedCell, anchor: Pick<Anchor, 'x' | 'y'>): void {
+  markRedDot(sheet, sheetWidth, sheetHeight, cell.col * cellWidth + anchor.x, cell.row * cellHeight + anchor.y);
+}
+
+function writeRedDotSheets(
+  sourceBakedSheet: Uint8ClampedArray,
+  originalTemplateGuideSheet: Uint8ClampedArray,
+  convertedEditableSheet: Uint8ClampedArray,
+  sheetWidth: number,
+  sheetHeight: number,
+  records: PlacementRecord[],
+  outDir: string,
+) {
+  const sourceRedDots = new Uint8ClampedArray(sourceBakedSheet);
+  const templateRedDots = new Uint8ClampedArray(originalTemplateGuideSheet);
+  const convertedRedDots = new Uint8ClampedArray(convertedEditableSheet);
+  const overlayRedDots = overlayBuffers(originalTemplateGuideSheet, convertedEditableSheet, 0.75);
+  for (const record of records) {
+    const cell = { action: record.action, frameIndex: record.frameIndex, col: record.col, row: record.row };
+    markCellRedDot(sourceRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
+    markCellRedDot(templateRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor);
+    markCellRedDot(convertedRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
+    markCellRedDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor);
+    markCellRedDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
+  }
+  writeRgbaPng(path.join(outDir, 'red-dot-source-baked-sheet.png'), sheetWidth, sheetHeight, sourceRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-template-guide-sheet.png'), sheetWidth, sheetHeight, templateRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-converted-sheet.png'), sheetWidth, sheetHeight, convertedRedDots);
+  writeRgbaPng(path.join(outDir, 'red-dot-template-vs-converted-overlay-sheet.png'), sheetWidth, sheetHeight, overlayRedDots);
+  return {
+    sourceBakedSheet: 'red-dot-source-baked-sheet.png',
+    templateGuideSheet: 'red-dot-template-guide-sheet.png',
+    convertedSheet: 'red-dot-converted-sheet.png',
+    overlaySheet: 'red-dot-template-vs-converted-overlay-sheet.png',
+  };
+}
+
 function writeOverlayStrip(filePath: string, title: string, frames: Uint8ClampedArray[]): void {
   const scale = 2;
   const labelHeight = 36;
@@ -681,7 +738,7 @@ function validatePlacementRecords(records: PlacementRecord[]) {
     destTop: record.destTop,
     actualAnchorInCell: record.actualAnchorInCell,
     error: record.error,
-    pass: Math.abs(record.error.dx) <= 0.5 && Math.abs(record.error.dy) <= 0.5,
+    pass: record.error.dx === 0 && record.error.dy === 0,
   }));
   return {
     pass: frames.every((frame) => frame.pass),
@@ -755,6 +812,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   writeRgbaPng(path.join(outDir, 'diff.png'), psd.width, psd.height, diff.diff);
   const frameValidation = validateCells(sheet, convertedEditableSheet, psd.width, psd.height, outDir);
   const placementValidation = validatePlacementRecords(placementRecords);
+  const redDotArtifacts = writeRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, psd.width, psd.height, placementRecords, outDir);
   const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
   const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
 
@@ -793,6 +851,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       fixedFramePlacementOffset: targetFixedOffset ? { ...targetFixedOffset } : null,
       manualFrameCorrections: Object.entries(targetManualCorrections).map(([key, correction]) => ({ key, ...correction })),
       placementValidation,
+      redDotArtifacts,
     },
     validation: {
       readbackLayerExactMatch: frameValidation.pass,
