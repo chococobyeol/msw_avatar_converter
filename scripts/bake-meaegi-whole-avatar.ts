@@ -29,6 +29,21 @@ interface LoadedFrame {
 type Bounds = LoadedFrame['bounds'];
 type FrameCorrection = { dx: number; dy: number; reason: string };
 type FixedFramePlacementOffset = { dx: number; dy: number; reason: string };
+type Anchor = { x: number; y: number; basis: string };
+type PlacementRecord = {
+  key: string;
+  action: string;
+  frameIndex: number;
+  col: number;
+  row: number;
+  targetAnchor: Anchor;
+  sourceAnchor: Anchor;
+  correction: { dx: number; dy: number } | null;
+  destLeft: number;
+  destTop: number;
+  actualAnchorInCell: { x: number; y: number };
+  error: { dx: number; dy: number };
+};
 
 interface ComparisonArtifact {
   action: string;
@@ -78,26 +93,23 @@ export interface BakeMeaegiWholeAvatarInput {
 
 const cellWidth = 250;
 const cellHeight = 250;
-const cellOriginX = 126;
-const cellOriginY = 130;
-const sourceOriginX = 150;
-const sourceOriginY = 200;
+const referenceCalibrationShare = 'NvkIKXl2Xw64';
 
 const fixedFramePlacementOffsets: Record<BakeTarget, FixedFramePlacementOffset> = {
   cape: {
     dx: 0,
-    dy: 2,
-    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Cape.psd cells; do not use target-frame bbox fitting',
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Cape.psd guide_character cells',
   },
   'cape-balloon': {
     dx: 0,
-    dy: 2,
-    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Cape_balloon.psd cells; do not use target-frame bbox fitting',
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Cape_balloon.psd guide_character cells',
   },
   longcoat: {
     dx: 0,
-    dy: 2,
-    reason: 'single fixed offset from MeAegi 300x300 render origin into Avatar_Longcoat.psd cells; do not use target-frame bbox fitting',
+    dy: 0,
+    reason: 'target-level offset after frame anchors are matched from MeAegi reference body to Avatar_Longcoat.psd guide_character cells',
   },
 };
 
@@ -216,31 +228,80 @@ function correctionKey(cell: Pick<BakedCell, 'action' | 'frameIndex'>): string {
   return `${cell.action}:${cell.frameIndex}`;
 }
 
-function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, cell: BakedCell, guideBounds?: Bounds, correction?: FrameCorrection, fixedOffset?: FixedFramePlacementOffset): void {
+function anchorFromBounds(bounds: Bounds | undefined, fallback: Anchor, basis: string): Anchor {
+  if (!bounds || bounds.empty) return fallback;
+  return {
+    x: (bounds.left + bounds.right) / 2,
+    y: bounds.bottom,
+    basis,
+  };
+}
+
+function placementForCell(cell: BakedCell, targetAnchor: Anchor, sourceAnchor: Anchor, correction?: FrameCorrection, fixedOffset?: FixedFramePlacementOffset): PlacementRecord {
   const cellLeft = cell.col * cellWidth;
   const cellTop = cell.row * cellHeight;
-  let destLeft: number;
-  let destTop: number;
-  if (fixedOffset) {
-    destLeft = Math.round(cellLeft + cellOriginX - sourceOriginX + fixedOffset.dx + (correction?.dx ?? 0));
-    destTop = Math.round(cellTop + cellOriginY - sourceOriginY + fixedOffset.dy + (correction?.dy ?? 0));
-  } else {
-    const sourceCenterX = frame.bounds.empty ? sourceOriginX : (frame.bounds.left + frame.bounds.right) / 2;
-    const sourceBottomY = frame.bounds.empty ? sourceOriginY : frame.bounds.bottom;
-    const targetCenterX = guideBounds && !guideBounds.empty ? (guideBounds.left + guideBounds.right) / 2 : cellOriginX;
-    const targetBottomY = guideBounds && !guideBounds.empty ? guideBounds.bottom : cellOriginY;
-    destLeft = Math.round(cellLeft + targetCenterX - sourceCenterX + (correction?.dx ?? 0));
-    destTop = Math.round(cellTop + targetBottomY - sourceBottomY + (correction?.dy ?? 0));
-  }
+  const correctionDx = correction?.dx ?? 0;
+  const correctionDy = correction?.dy ?? 0;
+  const fixedDx = fixedOffset?.dx ?? 0;
+  const fixedDy = fixedOffset?.dy ?? 0;
+  const destLeft = Math.round(cellLeft + targetAnchor.x - sourceAnchor.x + fixedDx + correctionDx);
+  const destTop = Math.round(cellTop + targetAnchor.y - sourceAnchor.y + fixedDy + correctionDy);
+  const actualAnchorInCell = {
+    x: destLeft + sourceAnchor.x - cellLeft,
+    y: destTop + sourceAnchor.y - cellTop,
+  };
+  return {
+    key: correctionKey(cell),
+    action: cell.action,
+    frameIndex: cell.frameIndex,
+    col: cell.col,
+    row: cell.row,
+    targetAnchor,
+    sourceAnchor,
+    correction: correction ? { dx: correction.dx, dy: correction.dy } : null,
+    destLeft,
+    destTop,
+    actualAnchorInCell,
+    error: {
+      dx: actualAnchorInCell.x - targetAnchor.x - fixedDx - correctionDx,
+      dy: actualAnchorInCell.y - targetAnchor.y - fixedDy - correctionDy,
+    },
+  };
+}
+
+function drawFrame(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, frame: LoadedFrame, placement: PlacementRecord): void {
   for (let y = 0; y < frame.height; y += 1) {
-    const ty = destTop + y;
+    const ty = placement.destTop + y;
     if (ty < 0 || ty >= sheetHeight) continue;
     for (let x = 0; x < frame.width; x += 1) {
-      const tx = destLeft + x;
+      const tx = placement.destLeft + x;
       if (tx < 0 || tx >= sheetWidth) continue;
       over(sheet, (ty * sheetWidth + tx) * 4, frame.rgba, (y * frame.width + x) * 4);
     }
   }
+}
+
+async function loadFrameSetForCells(share: string, cellsToLoad: BakedCell[]): Promise<Map<string, LoadedFrame>> {
+  const imported = await loadMeaegiImport(share);
+  const uniqueFrames = new Map<string, { action: string; frameIndex: number; imageRef: string }>();
+  for (const frame of imported.frames) {
+    const key = `${frame.action}:${frame.frameIndex}`;
+    if (!uniqueFrames.has(key) && frame.imageRef) uniqueFrames.set(key, { action: frame.action, frameIndex: frame.frameIndex, imageRef: frame.imageRef });
+  }
+  return loadFramesFromUniqueMap(uniqueFrames, cellsToLoad);
+}
+
+async function loadFramesFromUniqueMap(uniqueFrames: Map<string, { action: string; frameIndex: number; imageRef: string }>, cellsToLoad: BakedCell[]): Promise<Map<string, LoadedFrame>> {
+  const frameByKey = new Map<string, LoadedFrame>();
+  await Promise.all(cellsToLoad.map(async (cell) => {
+    const key = `${cell.action}:${cell.frameIndex}`;
+    const source = uniqueFrames.get(key);
+    if (!source) throw new Error(`Missing MeAegi frame for supported template cell: ${key}`);
+    if (frameByKey.has(key)) return;
+    const loaded = await loadPng(source.imageRef);
+    frameByKey.set(key, { ...source, ...loaded, bounds: alphaBounds(loaded.width, loaded.height, loaded.rgba) });
+  }));
+  return frameByKey;
 }
 
 function flatten(layers: Layer[] | undefined, parent = ''): Array<{ path: string; layer: Layer }> {
@@ -607,6 +668,29 @@ function validateCells(expectedSheet: Uint8ClampedArray, readbackSheet: Uint8Cla
   };
 }
 
+function validatePlacementRecords(records: PlacementRecord[]) {
+  const frames = records.map((record) => ({
+    key: record.key,
+    action: record.action,
+    frameIndex: record.frameIndex,
+    col: record.col,
+    row: record.row,
+    targetAnchor: record.targetAnchor,
+    sourceAnchor: record.sourceAnchor,
+    destLeft: record.destLeft,
+    destTop: record.destTop,
+    actualAnchorInCell: record.actualAnchorInCell,
+    error: record.error,
+    pass: Math.abs(record.error.dx) <= 0.5 && Math.abs(record.error.dy) <= 0.5,
+  }));
+  return {
+    pass: frames.every((frame) => frame.pass),
+    maxAbsDx: Math.max(0, ...frames.map((frame) => Math.abs(frame.error.dx))),
+    maxAbsDy: Math.max(0, ...frames.map((frame) => Math.abs(frame.error.dy))),
+    frames,
+  };
+}
+
 export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   ensureCanvasInitialized();
   const share = extractMeaegiShareId(input.share);
@@ -620,15 +704,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     const key = `${frame.action}:${frame.frameIndex}`;
     if (!uniqueFrames.has(key) && frame.imageRef) uniqueFrames.set(key, { action: frame.action, frameIndex: frame.frameIndex, imageRef: frame.imageRef });
   }
-  const frameByKey = new Map<string, LoadedFrame>();
-  for (const cell of bakedCells) {
-    const key = `${cell.action}:${cell.frameIndex}`;
-    const source = uniqueFrames.get(key);
-    if (!source) throw new Error(`Missing MeAegi frame for supported template cell: ${key}`);
-    if (frameByKey.has(key)) continue;
-    const loaded = await loadPng(source.imageRef);
-    frameByKey.set(key, { ...source, ...loaded, bounds: alphaBounds(loaded.width, loaded.height, loaded.rgba) });
-  }
+  const frameByKey = await loadFramesFromUniqueMap(uniqueFrames, bakedCells);
+  const referenceFrameByKey = await loadFrameSetForCells(referenceCalibrationShare, bakedCells);
 
   const psd = readPsd(readFileSync(config.templatePath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
   const originalTemplateGuideSheet = renderLayerSheet(psd, (entry) => entry.path.includes('guide_character'));
@@ -636,12 +713,20 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
   const targetFixedOffset = fixedFramePlacementOffsets[target];
-  const hasFixedFramePlacement = true;
   const targetManualCorrections = manualFrameCorrections[target] ?? {};
+  const placementRecords: PlacementRecord[] = [];
   const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
+  const referenceAlignmentSheet = new Uint8ClampedArray(psd.width * psd.height * 4);
   for (const cell of bakedCells) {
     const key = correctionKey(cell);
-    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, cell, guideBoundsByCell.get(key), targetManualCorrections[key], targetFixedOffset);
+    const guideBounds = guideBoundsByCell.get(key);
+    const targetAnchor = anchorFromBounds(guideBounds, { x: cellWidth / 2, y: cellHeight * 0.6, basis: 'fallback-cell-center' }, 'template-guide-character-center-bottom');
+    const referenceFrame = referenceFrameByKey.get(key)!;
+    const sourceAnchor = anchorFromBounds(referenceFrame.bounds, { x: referenceFrame.width / 2, y: referenceFrame.height * 2 / 3, basis: 'fallback-reference-frame-origin' }, `reference-share-${referenceCalibrationShare}-alpha-center-bottom`);
+    const placement = placementForCell(cell, targetAnchor, sourceAnchor, targetManualCorrections[key], targetFixedOffset);
+    placementRecords.push(placement);
+    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, placement);
+    drawFrame(referenceAlignmentSheet, psd.width, psd.height, referenceFrame, placement);
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
   if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
@@ -650,6 +735,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const psdPath = path.join(outDir, config.outputName);
   writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
   writeRgbaPng(path.join(outDir, 'expected-sheet.png'), psd.width, psd.height, sheet);
+  writeRgbaPng(path.join(outDir, 'reference-alignment-sheet.png'), psd.width, psd.height, referenceAlignmentSheet);
+  writeRgbaPng(path.join(outDir, 'reference-guide-overlay-sheet.png'), psd.width, psd.height, overlayBuffers(originalTemplateGuideSheet, referenceAlignmentSheet, 0.75));
   writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), psd.width, psd.height, originalTemplateGuideSheet);
   writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), psd.width, psd.height, originalTemplateReferenceSheet);
   writeRgbaPng(path.join(outDir, 'original-template-editable-sheet.png'), psd.width, psd.height, originalTemplateEditableSheet);
@@ -667,6 +754,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const diff = diffBuffers(psd.width, psd.height, sheet, convertedEditableSheet);
   writeRgbaPng(path.join(outDir, 'diff.png'), psd.width, psd.height, diff.diff);
   const frameValidation = validateCells(sheet, convertedEditableSheet, psd.width, psd.height, outDir);
+  const placementValidation = validatePlacementRecords(placementRecords);
   const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
   const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
 
@@ -698,15 +786,13 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     placement: {
       cellWidth,
       cellHeight,
-      fallbackCellOriginX: cellOriginX,
-      fallbackCellOriginY: cellOriginY,
-      fallbackSourceOriginX: sourceOriginX,
-      fallbackSourceOriginY: sourceOriginY,
-      anchor: hasFixedFramePlacement ? 'fixed-meaegi-frame-origin-with-single-target-offset' : 'per-frame-template-guide-character-bounds-center-bottom',
+      referenceCalibrationShare,
+      anchor: 'per-frame-template-guide-character-anchor-matched-to-reference-meaegi-body-anchor',
       zmapPresetRemoved: config.removeZmapPreset,
       targetLayerPromotedToTop: config.promoteTargetLayerToTop,
       fixedFramePlacementOffset: targetFixedOffset ? { ...targetFixedOffset } : null,
       manualFrameCorrections: Object.entries(targetManualCorrections).map(([key, correction]) => ({ key, ...correction })),
+      placementValidation,
     },
     validation: {
       readbackLayerExactMatch: frameValidation.pass,
