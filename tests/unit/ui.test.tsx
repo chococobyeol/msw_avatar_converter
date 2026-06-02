@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { JSDOM } from 'jsdom';
 import { render, fireEvent } from '@testing-library/react';
-import { App } from '../../src/App.js';
+import { App, buildWholeAvatarBakeUrl } from '../../src/App.js';
 import { buildMeaegiShareImport, extractMeaegiShareId, parseMeaegiFlight } from '../../src/meaegiShare.js';
 import { computeSampleValidation, sampleParts } from '../../src/sample.js';
 
@@ -55,6 +55,15 @@ test('MeAegi share adapter extracts public share payloads into source parts and 
   assert.equal(imported.diagnostics.hiddenEmotions[0].includedInDefaultImport, false);
   assert.equal(imported.parts.find((part) => part.id === 'hair')?.iconRef, 'https://storage.meaegi.com/storage/images/dressing-room/hair/00071180.png');
   assert.equal(imported.parts.find((part) => part.id === 'weapon')?.iconRef?.startsWith('https://avatar.maplestory.nexon.com/ItemIcon/'), true);
+});
+
+test('whole-avatar bake URL carries current selected source parts', () => {
+  const url = new URL(buildWholeAvatarBakeUrl('SHARE123', 'cape', ['hair', 'weapon']), 'http://localhost');
+  assert.equal(url.pathname, '/api/bake-meaegi');
+  assert.equal(url.searchParams.get('share'), 'SHARE123');
+  assert.equal(url.searchParams.get('target'), 'cape');
+  assert.equal(url.searchParams.get('format'), 'json');
+  assert.equal(url.searchParams.get('parts'), 'hair,weapon');
 });
 
 test('sample validation rejects invalid aggregate mapping semantics', () => {

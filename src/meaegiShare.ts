@@ -1,4 +1,5 @@
 export const MEAEGI_GET_SHARE_ACTION_ID = '10eba6e9f9badb7a6412e4a2a9db55024c24a323';
+export const MEAEGI_BUILD_HASH_ACTION_ID = 'f6097e19afeedc0220b15f769fbcae478c540a0f';
 
 const slotLabels: Record<string, string> = {
   skin: '피부',

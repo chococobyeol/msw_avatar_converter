@@ -5,6 +5,16 @@ import { computeUiValidation, defaultTargetForSourcePart, sampleFrames, samplePa
 type MappingMode = 'part' | 'group' | 'whole-avatar';
 type WholeAvatarBakeTarget = 'cape' | 'cape-balloon' | 'longcoat';
 
+export function buildWholeAvatarBakeUrl(share: string, target: WholeAvatarBakeTarget, selectedPartIds: string[]): string {
+  const params = new URLSearchParams({
+    share,
+    target,
+    format: 'json',
+    parts: selectedPartIds.join(','),
+  });
+  return `/api/bake-meaegi?${params.toString()}`;
+}
+
 interface UiMapping extends UiMappingInput {
   partId: string;
   targetPartId: string;
@@ -52,6 +62,8 @@ interface BakeResult {
     outputPsd: string;
     bakedFrames: number;
     skippedFrames: number;
+    selectedPartIds?: string[];
+    selection?: Record<string, unknown>;
     placement: {
       placementValidation?: {
         pass: boolean;
@@ -305,11 +317,18 @@ export function App() {
       setBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
       return;
     }
+    const selectedIds = importedSource
+      ? importedSource.parts.filter((part) => selectedPartIds.has(part.id)).map((part) => part.id)
+      : parts.map((part) => part.id);
+    if (importedSource && selectedIds.length === 0) {
+      setBakeStatus('선택 변환할 파트를 하나 이상 체크해야 합니다.');
+      return;
+    }
     setCurrentBakeTarget(target);
-    setBakeStatus(`converting whole-avatar ${target} PSD and generating motion GIF comparisons...`);
+    setBakeStatus(`converting ${target} PSD with ${selectedIds.length} selected part(s) and generating motion GIF comparisons...`);
     setBakeResult(null);
     try {
-      const response = await fetch(`/api/bake-meaegi?share=${encodeURIComponent(share)}&target=${target}&format=json`);
+      const response = await fetch(buildWholeAvatarBakeUrl(share, target, selectedIds));
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error ?? `HTTP ${response.status}`);
@@ -326,8 +345,9 @@ export function App() {
       const correctionCount = Array.isArray(appliedCorrections) ? appliedCorrections.length : 0;
       setBakeStatus(`converted ${target}: corrections=${correctionCount}, baked=${bakedFrames}, skipped=${skippedFrames}, redDotPass=${placement?.pass ?? false}, redDotMax=${placement?.maxAbsDx ?? '-'},${placement?.maxAbsDy ?? '-'}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
       setImportLog((current) => [
-        `GET /api/bake-meaegi target=${target} -> HTTP ${response.status}`,
+        `GET /api/bake-meaegi target=${target} selectedParts=${selectedIds.join(',') || '(none)'} -> HTTP ${response.status}`,
         `convertedOutput=${body.report.outputPsd}`,
+        `selection=${JSON.stringify(body.report.selection ?? { selectedPartIds: selectedIds })}`,
         `downloadName=${body.files.psdDownloadName ?? '-'}`,
         `appliedManualCorrections=${correctionCount}`,
         `redDotArtifacts=${JSON.stringify(body.files.redDots ?? {})}`,

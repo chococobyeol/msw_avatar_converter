@@ -121,10 +121,14 @@ function meaegiSharePlugin(): Plugin {
           const share = extractMeaegiShareId(requestUrl.searchParams.get('share') || '');
           const target = (requestUrl.searchParams.get('target') || 'cape') as BakeTarget;
           const format = requestUrl.searchParams.get('format') || 'json';
+          const selectedPartIds = (requestUrl.searchParams.get('parts') || '')
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean);
           if (!share) throw new Error('share query is required.');
           const outDir = newBakeRunDir(share, target);
           const savedManualFrameCorrections = readSavedCalibration(share, target);
-          const { report, psdPath } = await bakeMeaegiWholeAvatar({ share, target, outDir, manualFrameCorrections: savedManualFrameCorrections });
+          const { report, psdPath } = await bakeMeaegiWholeAvatar({ share, target, outDir, selectedPartIds: selectedPartIds.length > 0 ? selectedPartIds : undefined, manualFrameCorrections: savedManualFrameCorrections });
           const artifactVersion = String(Date.now());
           const downloadName = `${path.basename(psdPath, '.psd')}_${share}_${target}_${path.basename(outDir)}.psd`;
           if (format !== 'psd' && format !== 'download') {

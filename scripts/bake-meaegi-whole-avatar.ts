@@ -8,7 +8,7 @@ import { PNG } from 'pngjs';
 import { readPsd, writePsdBuffer, type Layer, type Psd } from 'ag-psd';
 import { ensureCanvasInitialized } from '../packages/psd-gate/src/canvas.js';
 import { writeRgbaPng } from '../packages/export/src/png.js';
-import { buildMeaegiShareImport, extractMeaegiShareId, MEAEGI_GET_SHARE_ACTION_ID, parseMeaegiFlight } from '../src/meaegiShare.js';
+import { buildMeaegiShareImport, extractMeaegiShareId, MEAEGI_BUILD_HASH_ACTION_ID, MEAEGI_GET_SHARE_ACTION_ID, parseMeaegiFlight, type MeaegiAvatarPayload } from '../src/meaegiShare.js';
 
 interface BakedCell {
   action: string;
@@ -90,6 +90,7 @@ export interface BakeMeaegiWholeAvatarInput {
   share: string;
   target?: BakeTarget;
   outDir?: string;
+  selectedPartIds?: string[];
   manualFrameCorrections?: Record<string, FrameCorrection>;
 }
 
@@ -265,11 +266,12 @@ function parseArgs() {
   return {
     share,
     target,
+    selectedPartIds: args.get('parts')?.split(',').map((part) => part.trim()).filter(Boolean),
     outDir: args.get('out') ?? path.join('artifacts/whole-avatar-bake', share, target),
   };
 }
 
-async function loadMeaegiImport(share: string) {
+async function fetchMeaegiSharePayload(share: string): Promise<MeaegiAvatarPayload> {
   const upstream = await fetch('https://meaegi.com/dressing-room', {
     method: 'POST',
     headers: {
@@ -281,7 +283,95 @@ async function loadMeaegiImport(share: string) {
   });
   const text = await upstream.text();
   if (!upstream.ok) throw new Error(`MeAegi returned HTTP ${upstream.status}.`);
-  return buildMeaegiShareImport(share, parseMeaegiFlight(text));
+  return parseMeaegiFlight(text);
+}
+
+function finiteItemEntries(avatar: MeaegiAvatarPayload): Array<[string, number]> {
+  return Object.entries(avatar.itemCode ?? {})
+    .filter((entry): entry is [string, number] => Number.isFinite(entry[1]));
+}
+
+function normalizeSelectedPartIds(avatar: MeaegiAvatarPayload, selectedPartIds?: string[]): string[] {
+  const available = new Set(finiteItemEntries(avatar).map(([slot]) => slot));
+  if (!selectedPartIds) return [...available];
+  return [...new Set(selectedPartIds)].filter((slot) => available.has(slot));
+}
+
+function buildMeaegiHashParams(avatar: MeaegiAvatarPayload, selectedPartIds: string[]) {
+  const selected = new Set(selectedPartIds);
+  const itemCode = Object.fromEntries(finiteItemEntries(avatar).filter(([slot]) => selected.has(slot)));
+  const itemPrism = Object.fromEntries(Object.entries(avatar.itemPrism ?? {}).filter(([slot, prism]) => selected.has(slot) && prism && itemCode[slot] !== undefined));
+  return {
+    gender: Number.isFinite(avatar.gender) ? avatar.gender : 1,
+    earType: Number.isFinite(avatar.earType) ? avatar.earType : 0,
+    weaponMotion: Number.isFinite(avatar.weaponMotion) ? avatar.weaponMotion : 0,
+    variation: Number.isFinite(avatar.variation) ? avatar.variation : 0,
+    variationType: Number.isFinite(avatar.variationType) ? avatar.variationType : 0,
+    weaponBaseEffect: Number.isFinite(avatar.weaponBaseEffect) ? avatar.weaponBaseEffect : 1,
+    weaponJumpEffect: Number.isFinite(avatar.weaponJumpEffect) ? avatar.weaponJumpEffect : 1,
+    weaponSpecialEffect: Number.isFinite(avatar.weaponSpecialEffect) ? avatar.weaponSpecialEffect : 1,
+    capeEffect: Number.isFinite(avatar.capeEffect) ? avatar.capeEffect : 1,
+    hideWeaponOnSkill: Number.isFinite(avatar.hideWeaponOnSkill) ? avatar.hideWeaponOnSkill : 1,
+    capEffect: Number.isFinite(avatar.capEffect) ? avatar.capEffect : 1,
+    floatEffect: Number.isFinite(avatar.floatEffect) ? avatar.floatEffect : 1,
+    itemCode,
+    itemPrism,
+  };
+}
+
+function parseMeaegiHashFlight(text: string): string {
+  const match = /(?:^|\n)\d+:T([0-9a-fA-F]+),/.exec(text);
+  if (!match || match.index === undefined) throw new Error('MeAegi hash payload was not found in the server response.');
+  const marker = match[0];
+  const start = match.index + marker.length;
+  const length = Number.parseInt(match[1], 16);
+  const hash = text.slice(start, start + length);
+  if (!/^[A-Z0-9]+$/.test(hash)) throw new Error('MeAegi hash payload had an unexpected format.');
+  return hash;
+}
+
+async function buildMeaegiHashFromSelectedParts(avatar: MeaegiAvatarPayload, selectedPartIds: string[]): Promise<string> {
+  const upstream = await fetch('https://meaegi.com/dressing-room', {
+    method: 'POST',
+    headers: {
+      'Next-Action': MEAEGI_BUILD_HASH_ACTION_ID,
+      'Content-Type': 'text/plain;charset=UTF-8',
+      Accept: 'text/x-component',
+    },
+    body: JSON.stringify([buildMeaegiHashParams(avatar, selectedPartIds)]),
+  });
+  const text = await upstream.text();
+  if (!upstream.ok) throw new Error(`MeAegi hash builder returned HTTP ${upstream.status}.`);
+  return parseMeaegiHashFlight(text);
+}
+
+async function loadMeaegiImport(share: string, selectedPartIds?: string[]) {
+  const avatar = await fetchMeaegiSharePayload(share);
+  const availablePartIds = finiteItemEntries(avatar).map(([slot]) => slot);
+  const selected = normalizeSelectedPartIds(avatar, selectedPartIds);
+  const isFullSelection = selected.length === availablePartIds.length && availablePartIds.every((slot) => selected.includes(slot));
+  const selectedAvatar: MeaegiAvatarPayload = { ...avatar };
+  let baselineHash: string | null = null;
+  if (!isFullSelection) {
+    const selectedHash = await buildMeaegiHashFromSelectedParts(avatar, selected);
+    baselineHash = await buildMeaegiHashFromSelectedParts(avatar, []);
+    selectedAvatar.hash = selectedHash;
+    selectedAvatar.itemCode = Object.fromEntries(finiteItemEntries(avatar).filter(([slot]) => selected.includes(slot)));
+    selectedAvatar.itemPrism = Object.fromEntries(Object.entries(avatar.itemPrism ?? {}).filter(([slot, prism]) => selected.includes(slot) && prism && selectedAvatar.itemCode?.[slot] !== undefined));
+  }
+  const imported = buildMeaegiShareImport(share, selectedAvatar);
+  return {
+    ...imported,
+    selection: {
+      requestedPartIds: selectedPartIds ?? availablePartIds,
+      availablePartIds,
+      selectedPartIds: selected,
+      fullHash: avatar.hash ?? null,
+      selectedHash: selectedAvatar.hash ?? null,
+      baselineHash,
+      baselineMaskApplied: !isFullSelection,
+    },
+  };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -427,6 +517,16 @@ async function loadFrameSetForCells(share: string, cellsToLoad: BakedCell[]): Pr
   return loadFramesFromUniqueMap(uniqueFrames, cellsToLoad);
 }
 
+async function loadFrameSetForHash(hash: string, cellsToLoad: BakedCell[]): Promise<Map<string, LoadedFrame>> {
+  const imported = buildMeaegiShareImport('baseline', { itemCode: { skin: 12018 }, hash });
+  const uniqueFrames = new Map<string, { action: string; frameIndex: number; imageRef: string }>();
+  for (const frame of imported.frames) {
+    const key = `${frame.action}:${frame.frameIndex}`;
+    if (!uniqueFrames.has(key) && frame.imageRef) uniqueFrames.set(key, { action: frame.action, frameIndex: frame.frameIndex, imageRef: frame.imageRef });
+  }
+  return loadFramesFromUniqueMap(uniqueFrames, cellsToLoad);
+}
+
 async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
   let index = 0;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -456,6 +556,44 @@ async function loadFramesFromUniqueMap(uniqueFrames: Map<string, { action: strin
     }
   });
   return frameByKey;
+}
+
+function colorDistance(a: Uint8ClampedArray, ai: number, b: Uint8ClampedArray, bi: number): number {
+  return Math.max(
+    Math.abs(a[ai] - b[bi]),
+    Math.abs(a[ai + 1] - b[bi + 1]),
+    Math.abs(a[ai + 2] - b[bi + 2]),
+    Math.abs(a[ai + 3] - b[bi + 3]),
+  );
+}
+
+function maskFrameAgainstBaseline(frame: LoadedFrame, baseline: LoadedFrame): LoadedFrame {
+  if (frame.width !== baseline.width || frame.height !== baseline.height) return frame;
+  const rgba = new Uint8ClampedArray(frame.rgba);
+  for (let i = 0; i < rgba.length; i += 4) {
+    if (rgba[i + 3] === 0 || baseline.rgba[i + 3] === 0) continue;
+    if (colorDistance(rgba, i, baseline.rgba, i) <= 2) {
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+      rgba[i + 3] = 0;
+    }
+  }
+  return {
+    ...frame,
+    imageRef: `${frame.imageRef}#selected-minus-baseline`,
+    rgba,
+    bounds: alphaBounds(frame.width, frame.height, rgba),
+  };
+}
+
+function applyBaselineMask(frameByKey: Map<string, LoadedFrame>, baselineFrameByKey: Map<string, LoadedFrame>): Map<string, LoadedFrame> {
+  const masked = new Map<string, LoadedFrame>();
+  for (const [key, frame] of frameByKey) {
+    const baseline = baselineFrameByKey.get(key);
+    masked.set(key, baseline ? maskFrameAgainstBaseline(frame, baseline) : frame);
+  }
+  return masked;
 }
 
 function flatten(layers: Layer[] | undefined, parent = ''): Array<{ path: string; layer: Layer }> {
@@ -948,14 +1086,22 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const outDir = input.outDir ?? path.join('artifacts/whole-avatar-bake', share, target);
   const config = targetConfigs[target];
   logProgress(`loading MeAegi share ${share}`);
-  const imported = await loadMeaegiImport(share);
+  const imported = await loadMeaegiImport(share, input.selectedPartIds);
+  if (input.selectedPartIds && imported.selection.selectedPartIds.length === 0) {
+    throw new Error('At least one selected source part is required for selective bake.');
+  }
   const uniqueFrames = new Map<string, { action: string; frameIndex: number; imageRef: string }>();
   for (const frame of imported.frames) {
     const key = `${frame.action}:${frame.frameIndex}`;
     if (!uniqueFrames.has(key) && frame.imageRef) uniqueFrames.set(key, { action: frame.action, frameIndex: frame.frameIndex, imageRef: frame.imageRef });
   }
   logProgress(`loading source frame PNGs (${uniqueFrames.size} unique action frames, concurrency=${frameFetchConcurrency}, cache=${frameCacheDir})`);
-  const frameByKey = await loadFramesFromUniqueMap(uniqueFrames, bakedCells);
+  let frameByKey = await loadFramesFromUniqueMap(uniqueFrames, bakedCells);
+  if (imported.selection.baselineHash) {
+    logProgress(`loading baseline frame PNGs for selected-part alpha mask (${imported.selection.baselineHash})`);
+    const baselineFrameByKey = await loadFrameSetForHash(imported.selection.baselineHash, bakedCells);
+    frameByKey = applyBaselineMask(frameByKey, baselineFrameByKey);
+  }
   logProgress(`loading reference calibration frame PNGs (${referenceCalibrationShare})`);
   const referenceFrameByKey = await loadFrameSetForCells(referenceCalibrationShare, bakedCells);
 
@@ -1037,6 +1183,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const report = {
     share,
     target,
+    selectedPartIds: imported.selection.selectedPartIds,
+    selection: imported.selection,
     templatePath: config.templatePath,
     editLayerPath: config.editLayerPath,
     outputPsd: psdPath,
@@ -1077,7 +1225,9 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       motionComparisons,
     },
     warnings: [
-      'This is a whole-avatar bake: it writes full-character frames into one expanded MSW editable layer rather than isolating worn source parts.',
+      imported.selection.baselineMaskApplied
+        ? 'Selective bake is active: selected-part render frames are alpha-masked against the MeAegi default baseline so excluded skin/face/hair/body pixels become transparent.'
+        : 'This is a whole-avatar bake: it writes full-character frames into one expanded MSW editable layer rather than isolating worn source parts.',
       'MSW upload/runtime validation is still manual; this script now emits MeAegi/template/converted motion GIFs so placement can be visually checked before upload.',
       'Blink/expression frames are intentionally excluded.',
       'Heal, ghost, and 쏘기F:2 actions are not represented by the current MSW avatar template grid and are skipped in this first bake.',
@@ -1089,8 +1239,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
 }
 
 async function main() {
-  const { share, target, outDir } = parseArgs();
-  const { report, reportPath } = await bakeMeaegiWholeAvatar({ share, target, outDir });
+  const { share, target, outDir, selectedPartIds } = parseArgs();
+  const { report, reportPath } = await bakeMeaegiWholeAvatar({ share, target, outDir, selectedPartIds });
   const failedPlacementFrames = report.placement.placementValidation.frames
     .filter((frame) => !frame.pass)
     .map((frame) => frame.key);
