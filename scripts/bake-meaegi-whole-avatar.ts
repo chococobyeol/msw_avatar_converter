@@ -28,7 +28,7 @@ interface LoadedFrame {
 }
 
 type Bounds = LoadedFrame['bounds'];
-type FrameCorrection = { dx: number; dy: number; reason: string };
+export type FrameCorrection = { dx: number; dy: number; reason: string };
 type FixedFramePlacementOffset = { dx: number; dy: number; reason: string };
 type Anchor = { x: number; y: number; basis: string };
 type PlacementRecord = {
@@ -90,6 +90,7 @@ export interface BakeMeaegiWholeAvatarInput {
   share: string;
   target?: BakeTarget;
   outDir?: string;
+  manualFrameCorrections?: Record<string, FrameCorrection>;
 }
 
 const cellWidth = 250;
@@ -965,7 +966,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, sheetWidth, sheetHeight, cell)]));
   const targetFixedOffset = fixedFramePlacementOffsets[target];
-  const targetManualCorrections = manualFrameCorrections[target] ?? {};
+  const targetManualCorrections = { ...(manualFrameCorrections[target] ?? {}), ...(input.manualFrameCorrections ?? {}) };
   const placementRecords: PlacementRecord[] = [];
   const sheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
   const referenceAlignmentSheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);

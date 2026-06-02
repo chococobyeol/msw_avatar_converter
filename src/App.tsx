@@ -48,6 +48,7 @@ interface BakeResultFile {
 
 interface BakeResult {
   report: {
+    target: WholeAvatarBakeTarget;
     outputPsd: string;
     bakedFrames: number;
     skippedFrames: number;
@@ -103,6 +104,11 @@ interface RedDotMeasurementResult {
   files?: {
     uploadedActual: string;
     report: string;
+    calibration?: string | null;
+  };
+  calibration?: {
+    saved: boolean;
+    corrections: number;
   };
   frames: Array<{
     key: string;
@@ -171,6 +177,7 @@ export function App() {
   const [exportStatus, setExportStatus] = useState('not exported');
   const [bakeStatus, setBakeStatus] = useState('whole-avatar PSD not baked');
   const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
+  const [currentBakeTarget, setCurrentBakeTarget] = useState<WholeAvatarBakeTarget | null>(null);
   const [adjustedRedDotFile, setAdjustedRedDotFile] = useState<File | null>(null);
   const [redDotMeasureStatus, setRedDotMeasureStatus] = useState('red-dot 비교 파일 없음');
   const [redDotMeasureResult, setRedDotMeasureResult] = useState<RedDotMeasurementResult | null>(null);
@@ -297,6 +304,7 @@ export function App() {
       setBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
       return;
     }
+    setCurrentBakeTarget(target);
     setBakeStatus(`converting whole-avatar ${target} PSD and generating motion GIF comparisons...`);
     setBakeResult(null);
     try {
@@ -341,10 +349,16 @@ export function App() {
       setRedDotMeasureStatus('비교할 수동 보정 PNG/PSD 파일을 선택해야 합니다.');
       return;
     }
-    setRedDotMeasureStatus(`comparing ${adjustedRedDotFile.name} against template red dots...`);
+    const target = currentBakeTarget ?? bakeResult.report.target;
+    const share = importedSource?.share ?? importJson.trim();
+    if (!share) {
+      setRedDotMeasureStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
+      return;
+    }
+    setRedDotMeasureStatus(`comparing ${adjustedRedDotFile.name}, saving calibration, then rebaking ${target}...`);
     setRedDotMeasureResult(null);
     try {
-      const response = await fetch(`/api/red-dot-measure?expected=${encodeURIComponent(bakeResult.files.redDots.templateGuideSheet)}`, {
+      const response = await fetch(`/api/red-dot-measure?expected=${encodeURIComponent(bakeResult.files.redDots.templateGuideSheet)}&share=${encodeURIComponent(share)}&target=${target}`, {
         method: 'POST',
         headers: {
           'x-file-name': adjustedRedDotFile.name,
@@ -355,13 +369,17 @@ export function App() {
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
       setRedDotMeasureResult(body as RedDotMeasurementResult);
-      setRedDotMeasureStatus(`red-dot compare: pass=${body.pass}, failed=${body.failedFrames}, maxDx=${body.maxAbsDx}, maxDy=${body.maxAbsDy}`);
+      setRedDotMeasureStatus(`calibration saved=${body.calibration?.saved ?? false}, corrections=${body.calibration?.corrections ?? 0}; rebaking ${target}...`);
       setImportLog((current) => [
         `POST /api/red-dot-measure -> HTTP ${response.status}`,
         `manualRedDotCompare pass=${body.pass} failed=${body.failedFrames} maxDx=${body.maxAbsDx} maxDy=${body.maxAbsDy}`,
+        `manualCalibration saved=${body.calibration?.saved ?? false} corrections=${body.calibration?.corrections ?? 0} file=${body.files?.calibration ?? '-'}`,
         `manualRedDotReport=${body.files?.report ?? '-'}`,
         ...current,
       ]);
+      if (!body.calibration?.saved) throw new Error('calibration was not saved; uploaded file is missing required 1px green dots.');
+      await convertWholeAvatarPsd(target);
+      setRedDotMeasureStatus(`calibration applied and ${target} rebaked. 새 PSD 다운로드 링크를 다시 눌러야 합니다.`);
     } catch (error) {
       const message = `red-dot compare failed: ${(error as Error).message}`;
       setRedDotMeasureStatus(message);
@@ -484,7 +502,7 @@ export function App() {
                       onChange={(event) => setAdjustedRedDotFile(event.target.files?.[0] ?? null)}
                     />
                   </label>
-                  <button disabled={!adjustedRedDotFile} onClick={compareAdjustedRedDots}>선택 파일 좌표 비교</button>
+                  <button disabled={!adjustedRedDotFile} onClick={compareAdjustedRedDots}>좌표 비교 + 보정 저장 + 재변환</button>
                   <span aria-label="red-dot-measure-status">{redDotMeasureStatus}</span>
                 </div>
                 {redDotMeasureResult ? (

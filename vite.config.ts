@@ -1,9 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { buildMeaegiShareImport, extractMeaegiShareId, MEAEGI_GET_SHARE_ACTION_ID, parseMeaegiFlight } from './src/meaegiShare.js';
-import { bakeMeaegiWholeAvatar, type BakeTarget } from './scripts/bake-meaegi-whole-avatar.js';
+import { bakeMeaegiWholeAvatar, type BakeTarget, type FrameCorrection } from './scripts/bake-meaegi-whole-avatar.js';
 import { measureRedDotDrift } from './scripts/measure-red-dot-drift.js';
 
 function contentTypeFor(filePath: string): string {
@@ -14,8 +14,9 @@ function contentTypeFor(filePath: string): string {
   return 'application/octet-stream';
 }
 
-function artifactUrl(filePath: string): string {
-  return `/${filePath.split(path.sep).map(encodeURIComponent).join('/')}`;
+function artifactUrl(filePath: string, version?: string): string {
+  const url = `/${filePath.split(path.sep).map(encodeURIComponent).join('/')}`;
+  return version ? `${url}?v=${encodeURIComponent(version)}` : url;
 }
 
 function artifactPathFromUrl(value: string): string {
@@ -33,6 +34,34 @@ function readRequestBody(req: import('node:http').IncomingMessage): Promise<Buff
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+function bakeOutDir(share: string, target: BakeTarget): string {
+  return path.join('artifacts', 'whole-avatar-bake', share, target);
+}
+
+function calibrationPath(share: string, target: BakeTarget): string {
+  return path.join(bakeOutDir(share, target), 'manual-frame-corrections.json');
+}
+
+function readSavedCalibration(share: string, target: BakeTarget): Record<string, FrameCorrection> | undefined {
+  const filePath = calibrationPath(share, target);
+  if (!existsSync(filePath)) return undefined;
+  const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as { corrections?: Record<string, FrameCorrection> };
+  return parsed.corrections;
+}
+
+function correctionsFromRedGreenReport(report: ReturnType<typeof measureRedDotDrift>): Record<string, FrameCorrection> {
+  return Object.fromEntries(report.frames
+    .filter((frame) => frame.deltaActualMinusExpected)
+    .map((frame) => [
+      frame.key,
+      {
+        dx: frame.deltaActualMinusExpected!.dx,
+        dy: frame.deltaActualMinusExpected!.dy,
+        reason: 'calibrated from UI uploaded red/green dot overlay',
+      },
+    ]));
 }
 
 function meaegiSharePlugin(): Plugin {
@@ -88,33 +117,35 @@ function meaegiSharePlugin(): Plugin {
           const target = (requestUrl.searchParams.get('target') || 'cape') as BakeTarget;
           const format = requestUrl.searchParams.get('format') || 'json';
           if (!share) throw new Error('share query is required.');
-          const outDir = path.join('artifacts/whole-avatar-bake', share, target);
-          const { report, psdPath } = await bakeMeaegiWholeAvatar({ share, target, outDir });
+          const outDir = bakeOutDir(share, target);
+          const savedManualFrameCorrections = readSavedCalibration(share, target);
+          const { report, psdPath } = await bakeMeaegiWholeAvatar({ share, target, outDir, manualFrameCorrections: savedManualFrameCorrections });
+          const artifactVersion = String(Date.now());
           if (format !== 'psd' && format !== 'download') {
             res.statusCode = 200;
             res.setHeader('content-type', 'application/json; charset=utf-8');
             res.end(JSON.stringify({
               report,
               files: {
-                psd: artifactUrl(psdPath),
-                report: artifactUrl(path.join(outDir, 'validation-report.json')),
-                expectedSheet: artifactUrl(path.join(outDir, 'expected-sheet.png')),
-                templateGuideSheet: artifactUrl(path.join(outDir, 'original-template-guide-sheet.png')),
-                templateReferenceSheet: artifactUrl(path.join(outDir, 'original-template-reference-sheet.png')),
-                convertedEditableSheet: artifactUrl(path.join(outDir, 'converted-editable-sheet.png')),
-                diff: artifactUrl(path.join(outDir, 'diff.png')),
+                psd: artifactUrl(psdPath, artifactVersion),
+                report: artifactUrl(path.join(outDir, 'validation-report.json'), artifactVersion),
+                expectedSheet: artifactUrl(path.join(outDir, 'expected-sheet.png'), artifactVersion),
+                templateGuideSheet: artifactUrl(path.join(outDir, 'original-template-guide-sheet.png'), artifactVersion),
+                templateReferenceSheet: artifactUrl(path.join(outDir, 'original-template-reference-sheet.png'), artifactVersion),
+                convertedEditableSheet: artifactUrl(path.join(outDir, 'converted-editable-sheet.png'), artifactVersion),
+                diff: artifactUrl(path.join(outDir, 'diff.png'), artifactVersion),
                 redDots: {
-                  sourceBakedSheet: artifactUrl(path.join(outDir, 'red-dot-source-baked-sheet.png')),
-                  templateGuideSheet: artifactUrl(path.join(outDir, 'red-dot-template-guide-sheet.png')),
-                  convertedSheet: artifactUrl(path.join(outDir, 'red-dot-converted-sheet.png')),
-                  overlaySheet: artifactUrl(path.join(outDir, 'red-dot-template-vs-converted-overlay-sheet.png')),
-                  coordinates: artifactUrl(path.join(outDir, 'red-dot-coordinates.json')),
+                  sourceBakedSheet: artifactUrl(path.join(outDir, 'red-dot-source-baked-sheet.png'), artifactVersion),
+                  templateGuideSheet: artifactUrl(path.join(outDir, 'red-dot-template-guide-sheet.png'), artifactVersion),
+                  convertedSheet: artifactUrl(path.join(outDir, 'red-dot-converted-sheet.png'), artifactVersion),
+                  overlaySheet: artifactUrl(path.join(outDir, 'red-dot-template-vs-converted-overlay-sheet.png'), artifactVersion),
+                  coordinates: artifactUrl(path.join(outDir, 'red-dot-coordinates.json'), artifactVersion),
                 },
                 motionComparisonGifs: report.validation.motionComparisons.map((artifact) => ({
                   action: artifact.action,
                   frameCount: artifact.frameCount,
-                  gif: artifact.gifPath ? artifactUrl(path.join(outDir, artifact.gifPath)) : null,
-                  frameDir: artifactUrl(path.join(outDir, artifact.frameDir)),
+                  gif: artifact.gifPath ? artifactUrl(path.join(outDir, artifact.gifPath), artifactVersion) : null,
+                  frameDir: artifactUrl(path.join(outDir, artifact.frameDir), artifactVersion),
                   sourceVsConvertedDiffPixels: artifact.sourceVsConvertedDiffPixels,
                   sourceVsTemplateDiffPixels: artifact.sourceVsTemplateDiffPixels,
                 })),
@@ -146,6 +177,8 @@ function meaegiSharePlugin(): Plugin {
           if (req.method !== 'POST') throw new Error('POST required.');
           const requestUrl = new URL(req.url || '', 'http://localhost');
           const expected = requestUrl.searchParams.get('expected') || '';
+          const share = extractMeaegiShareId(requestUrl.searchParams.get('share') || '');
+          const target = (requestUrl.searchParams.get('target') || '') as BakeTarget;
           if (!expected) throw new Error('expected query is required.');
           const expectedPath = artifactPathFromUrl(expected);
           const fileName = path.basename(String(req.headers['x-file-name'] || 'adjusted-red-dot.png')).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -155,16 +188,39 @@ function meaegiSharePlugin(): Plugin {
           mkdirSync(uploadDir, { recursive: true });
           const actualPath = path.join(uploadDir, fileName);
           writeFileSync(actualPath, await readRequestBody(req));
-          const report = measureRedDotDrift(expectedPath, actualPath);
+          const report = measureRedDotDrift(expectedPath, actualPath, 'red', 'green');
           const reportPath = path.join(uploadDir, 'red-dot-measurement.json');
           writeFileSync(reportPath, JSON.stringify(report, null, 2));
+          const corrections = correctionsFromRedGreenReport(report);
+          let savedCalibrationPath: string | null = null;
+          if (share && target && report.missingFrames === 0) {
+            const filePath = calibrationPath(share, target);
+            mkdirSync(path.dirname(filePath), { recursive: true });
+            writeFileSync(filePath, JSON.stringify({
+              share,
+              target,
+              source: 'ui-red-green-dot-upload',
+              measuredAt: new Date().toISOString(),
+              expectedPath,
+              actualPath,
+              reportPath,
+              corrections,
+            }, null, 2));
+            savedCalibrationPath = filePath;
+          }
+          const artifactVersion = String(Date.now());
           res.statusCode = 200;
           res.setHeader('content-type', 'application/json; charset=utf-8');
           res.end(JSON.stringify({
             ...report,
             files: {
-              uploadedActual: artifactUrl(actualPath),
-              report: artifactUrl(reportPath),
+              uploadedActual: artifactUrl(actualPath, artifactVersion),
+              report: artifactUrl(reportPath, artifactVersion),
+              calibration: savedCalibrationPath ? artifactUrl(savedCalibrationPath, artifactVersion) : null,
+            },
+            calibration: {
+              saved: Boolean(savedCalibrationPath),
+              corrections: Object.keys(corrections).length,
             },
           }));
         } catch (error) {
