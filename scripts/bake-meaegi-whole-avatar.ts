@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -94,6 +95,14 @@ export interface BakeMeaegiWholeAvatarInput {
 const cellWidth = 250;
 const cellHeight = 250;
 const referenceCalibrationShare = 'NvkIKXl2Xw64';
+const frameFetchConcurrency = 4;
+const frameFetchRetryAttempts = 4;
+const frameFetchTimeoutMs = 20_000;
+const frameCacheDir = path.join('artifacts', 'frame-cache');
+
+function logProgress(message: string): void {
+  process.stderr.write(`[bake] ${message}\n`);
+}
 
 const fixedFramePlacementOffsets: Record<BakeTarget, FixedFramePlacementOffset> = {
   cape: {
@@ -188,10 +197,50 @@ async function loadMeaegiImport(share: string) {
   return buildMeaegiShareImport(share, parseMeaegiFlight(text));
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function frameCachePath(url: string): string {
+  return path.join(frameCacheDir, `${createHash('sha1').update(url).digest('hex')}.png`);
+}
+
+function fetchErrorSummary(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = (error as Error & { cause?: unknown }).cause;
+    if (cause instanceof Error) return `${error.message}; cause=${cause.message}`;
+    return error.message;
+  }
+  return String(error);
+}
+
+async function fetchFrameBuffer(url: string): Promise<Buffer> {
+  mkdirSync(frameCacheDir, { recursive: true });
+  const cachedPath = frameCachePath(url);
+  if (existsSync(cachedPath)) return readFileSync(cachedPath);
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= frameFetchRetryAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), frameFetchTimeoutMs);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      writeFileSync(cachedPath, buffer);
+      return buffer;
+    } catch (error) {
+      lastError = error;
+      if (attempt < frameFetchRetryAttempts) await sleep(600 * attempt * attempt);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw new Error(`Frame fetch failed after ${frameFetchRetryAttempts} attempts: ${url} (${fetchErrorSummary(lastError)})`);
+}
+
 async function loadPng(url: string): Promise<{ width: number; height: number; rgba: Uint8ClampedArray }> {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Frame fetch failed ${response.status}: ${url}`);
-  const png = PNG.sync.read(Buffer.from(await response.arrayBuffer()));
+  const png = PNG.sync.read(await fetchFrameBuffer(url));
   return { width: png.width, height: png.height, rgba: new Uint8ClampedArray(png.data.buffer, png.data.byteOffset, png.data.byteLength) };
 }
 
@@ -291,16 +340,34 @@ async function loadFrameSetForCells(share: string, cellsToLoad: BakedCell[]): Pr
   return loadFramesFromUniqueMap(uniqueFrames, cellsToLoad);
 }
 
+async function runWithConcurrency<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
+  let index = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (index < items.length) {
+      const item = items[index];
+      index += 1;
+      await worker(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
 async function loadFramesFromUniqueMap(uniqueFrames: Map<string, { action: string; frameIndex: number; imageRef: string }>, cellsToLoad: BakedCell[]): Promise<Map<string, LoadedFrame>> {
   const frameByKey = new Map<string, LoadedFrame>();
-  await Promise.all(cellsToLoad.map(async (cell) => {
+  const cellsByKey = new Map<string, BakedCell>();
+  for (const cell of cellsToLoad) cellsByKey.set(`${cell.action}:${cell.frameIndex}`, cell);
+  let loadedCount = 0;
+  await runWithConcurrency([...cellsByKey.values()], frameFetchConcurrency, async (cell) => {
     const key = `${cell.action}:${cell.frameIndex}`;
     const source = uniqueFrames.get(key);
     if (!source) throw new Error(`Missing MeAegi frame for supported template cell: ${key}`);
-    if (frameByKey.has(key)) return;
     const loaded = await loadPng(source.imageRef);
     frameByKey.set(key, { ...source, ...loaded, bounds: alphaBounds(loaded.width, loaded.height, loaded.rgba) });
-  }));
+    loadedCount += 1;
+    if (loadedCount === 1 || loadedCount % 10 === 0 || loadedCount === cellsByKey.size) {
+      logProgress(`loaded frame PNGs ${loadedCount}/${cellsByKey.size}`);
+    }
+  });
   return frameByKey;
 }
 
@@ -793,25 +860,32 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   if (!(target in targetConfigs)) throw new Error(`Unknown target "${target}". Use cape, cape-balloon, or longcoat.`);
   const outDir = input.outDir ?? path.join('artifacts/whole-avatar-bake', share, target);
   const config = targetConfigs[target];
+  logProgress(`loading MeAegi share ${share}`);
   const imported = await loadMeaegiImport(share);
   const uniqueFrames = new Map<string, { action: string; frameIndex: number; imageRef: string }>();
   for (const frame of imported.frames) {
     const key = `${frame.action}:${frame.frameIndex}`;
     if (!uniqueFrames.has(key) && frame.imageRef) uniqueFrames.set(key, { action: frame.action, frameIndex: frame.frameIndex, imageRef: frame.imageRef });
   }
+  logProgress(`loading source frame PNGs (${uniqueFrames.size} unique action frames, concurrency=${frameFetchConcurrency}, cache=${frameCacheDir})`);
   const frameByKey = await loadFramesFromUniqueMap(uniqueFrames, bakedCells);
+  logProgress(`loading reference calibration frame PNGs (${referenceCalibrationShare})`);
   const referenceFrameByKey = await loadFrameSetForCells(referenceCalibrationShare, bakedCells);
 
+  logProgress(`reading template ${config.templatePath}`);
   const psd = readPsd(readFileSync(config.templatePath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
+  const sheetWidth = psd.width;
+  const sheetHeight = psd.height;
   const originalTemplateGuideSheet = renderLayerSheet(psd, (entry) => entry.path.includes('guide_character'));
   const originalTemplateReferenceSheet = renderTemplateReferenceSheet(psd);
   const originalTemplateEditableSheet = renderEditableSheet(psd);
-  const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, psd.width, psd.height, cell)]));
+  const guideBoundsByCell = new Map<string, Bounds>(bakedCells.map((cell) => [`${cell.action}:${cell.frameIndex}`, cellBounds(originalTemplateGuideSheet, sheetWidth, sheetHeight, cell)]));
   const targetFixedOffset = fixedFramePlacementOffsets[target];
   const targetManualCorrections = manualFrameCorrections[target] ?? {};
   const placementRecords: PlacementRecord[] = [];
-  const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
-  const referenceAlignmentSheet = new Uint8ClampedArray(psd.width * psd.height * 4);
+  const sheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+  const referenceAlignmentSheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+  logProgress(`drawing ${bakedCells.length} baked cells`);
   for (const cell of bakedCells) {
     const key = correctionKey(cell);
     const guideBounds = guideBoundsByCell.get(key);
@@ -820,39 +894,45 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     const sourceAnchor = anchorFromBounds(referenceFrame.bounds, { x: referenceFrame.width / 2, y: referenceFrame.height * 2 / 3, basis: 'fallback-reference-frame-origin' }, `reference-share-${referenceCalibrationShare}-alpha-center-bottom`);
     const placement = placementForCell(cell, targetAnchor, sourceAnchor, targetManualCorrections[key], targetFixedOffset);
     placementRecords.push(placement);
-    drawFrame(sheet, psd.width, psd.height, frameByKey.get(key)!, placement);
-    drawFrame(referenceAlignmentSheet, psd.width, psd.height, referenceFrame, placement);
+    drawFrame(sheet, sheetWidth, sheetHeight, frameByKey.get(key)!, placement);
+    drawFrame(referenceAlignmentSheet, sheetWidth, sheetHeight, referenceFrame, placement);
   }
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
   if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
   if (config.promoteTargetLayerToTop) promoteLayerToTop(psd, config.editLayerPath);
   mkdirSync(outDir, { recursive: true });
   const psdPath = path.join(outDir, config.outputName);
+  logProgress(`writing PSD ${psdPath}`);
   writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
-  writeRgbaPng(path.join(outDir, 'expected-sheet.png'), psd.width, psd.height, sheet);
-  writeRgbaPng(path.join(outDir, 'reference-alignment-sheet.png'), psd.width, psd.height, referenceAlignmentSheet);
-  writeRgbaPng(path.join(outDir, 'reference-guide-overlay-sheet.png'), psd.width, psd.height, overlayBuffers(originalTemplateGuideSheet, referenceAlignmentSheet, 0.75));
-  writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), psd.width, psd.height, originalTemplateGuideSheet);
-  writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), psd.width, psd.height, originalTemplateReferenceSheet);
-  writeRgbaPng(path.join(outDir, 'original-template-editable-sheet.png'), psd.width, psd.height, originalTemplateEditableSheet);
+  logProgress('writing sheet PNG artifacts');
+  writeRgbaPng(path.join(outDir, 'expected-sheet.png'), sheetWidth, sheetHeight, sheet);
+  writeRgbaPng(path.join(outDir, 'reference-alignment-sheet.png'), sheetWidth, sheetHeight, referenceAlignmentSheet);
+  writeRgbaPng(path.join(outDir, 'reference-guide-overlay-sheet.png'), sheetWidth, sheetHeight, overlayBuffers(originalTemplateGuideSheet, referenceAlignmentSheet, 0.75));
+  writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), sheetWidth, sheetHeight, originalTemplateGuideSheet);
+  writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), sheetWidth, sheetHeight, originalTemplateReferenceSheet);
+  writeRgbaPng(path.join(outDir, 'original-template-editable-sheet.png'), sheetWidth, sheetHeight, originalTemplateEditableSheet);
 
+  logProgress('reading generated PSD back for validation');
+  psd.children = undefined;
   const readback = readPsd(readFileSync(psdPath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
   const readbackLayer = flatten(readback.children).find((entry) => entry.path === config.editLayerPath)?.layer;
   if (!readbackLayer?.imageData?.data) throw new Error('Readback layer imageData missing.');
   const readbackData = new Uint8ClampedArray(readbackLayer.imageData.data.buffer, readbackLayer.imageData.data.byteOffset, readbackLayer.imageData.data.byteLength);
   writeRgbaPng(path.join(outDir, 'readback-layer.png'), readbackLayer.imageData.width, readbackLayer.imageData.height, readbackData);
-  const readbackSheet = new Uint8ClampedArray(psd.width * psd.height * 4);
-  blitLayerToSheet(readbackSheet, psd.width, psd.height, readbackLayer);
-  writeRgbaPng(path.join(outDir, 'readback-sheet.png'), psd.width, psd.height, readbackSheet);
+  const readbackSheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+  blitLayerToSheet(readbackSheet, sheetWidth, sheetHeight, readbackLayer);
+  writeRgbaPng(path.join(outDir, 'readback-sheet.png'), sheetWidth, sheetHeight, readbackSheet);
+  logProgress('rendering converted editable sheet and validation artifacts');
   const convertedEditableSheet = renderEditableSheet(readback);
-  writeRgbaPng(path.join(outDir, 'converted-editable-sheet.png'), psd.width, psd.height, convertedEditableSheet);
-  const diff = diffBuffers(psd.width, psd.height, sheet, convertedEditableSheet);
-  writeRgbaPng(path.join(outDir, 'diff.png'), psd.width, psd.height, diff.diff);
-  const frameValidation = validateCells(sheet, convertedEditableSheet, psd.width, psd.height, outDir);
-  const placementValidation = validatePlacementRecords(placementRecords, psd.width, psd.height);
-  const redDotArtifacts = writeRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, psd.width, psd.height, placementRecords, outDir);
-  const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
-  const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, psd.width, psd.height, outDir);
+  writeRgbaPng(path.join(outDir, 'converted-editable-sheet.png'), sheetWidth, sheetHeight, convertedEditableSheet);
+  const diff = diffBuffers(sheetWidth, sheetHeight, sheet, convertedEditableSheet);
+  writeRgbaPng(path.join(outDir, 'diff.png'), sheetWidth, sheetHeight, diff.diff);
+  const frameValidation = validateCells(sheet, convertedEditableSheet, sheetWidth, sheetHeight, outDir);
+  const placementValidation = validatePlacementRecords(placementRecords, sheetWidth, sheetHeight);
+  const redDotArtifacts = writeRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, sheetWidth, sheetHeight, placementRecords, outDir);
+  logProgress('writing motion comparison frames/GIFs');
+  const motionComparisons = writeMotionComparisons(sheet, originalTemplateReferenceSheet, convertedEditableSheet, sheetWidth, sheetHeight, outDir);
+  const placementOverlays = writePlacementOverlays(originalTemplateReferenceSheet, convertedEditableSheet, sheetWidth, sheetHeight, outDir);
 
   const supportedKeys = new Set(bakedCells.map((cell) => `${cell.action}:${cell.frameIndex}`));
   const representedDuplicateKeys = new Map<string, string>([
@@ -875,6 +955,12 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     outputPsd: psdPath,
     sourceActionFrames: uniqueFrames.size,
     bakedFrames: bakedCells.length,
+    frameFetch: {
+      concurrency: frameFetchConcurrency,
+      retryAttempts: frameFetchRetryAttempts,
+      timeoutMs: frameFetchTimeoutMs,
+      cacheDir: frameCacheDir,
+    },
     skippedFrames: skipped.length,
     skipped,
     duplicateRepresentedFrames,
@@ -910,14 +996,40 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       'Heal and ghost actions are not represented by the current MSW avatar template grid and are skipped in this first bake.',
     ],
   };
-  writeFileSync(path.join(outDir, 'validation-report.json'), JSON.stringify(report, null, 2));
-  return { report, psdPath, expectedSheetPath: path.join(outDir, 'expected-sheet.png'), readbackLayerPath: path.join(outDir, 'readback-layer.png'), diffPath: path.join(outDir, 'diff.png') };
+  const reportPath = path.join(outDir, 'validation-report.json');
+  writeFileSync(reportPath, JSON.stringify(report, null, 2));
+  return { report, reportPath, psdPath, expectedSheetPath: path.join(outDir, 'expected-sheet.png'), readbackLayerPath: path.join(outDir, 'readback-layer.png'), diffPath: path.join(outDir, 'diff.png') };
 }
 
 async function main() {
   const { share, target, outDir } = parseArgs();
-  const { report } = await bakeMeaegiWholeAvatar({ share, target, outDir });
-  console.log(JSON.stringify(report, null, 2));
+  const { report, reportPath } = await bakeMeaegiWholeAvatar({ share, target, outDir });
+  const failedPlacementFrames = report.placement.placementValidation.frames
+    .filter((frame) => !frame.pass)
+    .map((frame) => frame.key);
+  console.log(JSON.stringify({
+    share: report.share,
+    target: report.target,
+    outputPsd: report.outputPsd,
+    reportPath,
+    frameFetch: report.frameFetch,
+    validation: {
+      readbackLayerExactMatch: report.validation.readbackLayerExactMatch,
+      diffPixels: report.validation.diffPixels,
+      maxChannelDelta: report.validation.maxChannelDelta,
+      frameCellsPass: report.validation.frameCellsPass,
+      frameCellDiffPixels: report.validation.frameCellDiffPixels,
+      motionComparisonGifsGenerated: report.validation.motionComparisonGifsGenerated,
+    },
+    placement: {
+      pass: report.placement.placementValidation.pass,
+      maxAbsDx: report.placement.placementValidation.maxAbsDx,
+      maxAbsDy: report.placement.placementValidation.maxAbsDy,
+      failedFrames: failedPlacementFrames,
+    },
+    skippedFrames: report.skippedFrames,
+    warnings: report.warnings,
+  }, null, 2));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
