@@ -452,32 +452,32 @@ export function App() {
             </div>
             {bakeResult.files.redDots ? (
               <section className="red-dot-panel">
-                <h3>Red-dot calibration files</h3>
-                <p className="muted">이 파일들이 실제 비교용 기준입니다. template red-dot와 converted/source red-dot를 열어서 수동 보정하거나, 보정한 PNG/PSD를 아래에 넣으면 좌표 차이를 계산합니다.</p>
+                <h3>1px calibration dots</h3>
+                <p className="muted">Template 기준점은 빨간 1px, converted/source 결과 기준점은 초록 1px입니다. 흰 테두리/큰 점 없이 좌표만 비교합니다.</p>
                 <div className="artifact-links">
-                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">Template red-dot 기준</a>
-                  <a href={bakeResult.files.redDots.sourceBakedSheet} target="_blank" rel="noreferrer">Source baked red-dot</a>
-                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">Converted red-dot</a>
-                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">Red-dot overlay</a>
-                  <a href={bakeResult.files.redDots.coordinates} target="_blank" rel="noreferrer">red-dot 좌표 JSON</a>
+                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">Template 빨간 1px 기준</a>
+                  <a href={bakeResult.files.redDots.sourceBakedSheet} target="_blank" rel="noreferrer">Source 초록 1px 결과</a>
+                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">Converted 초록 1px 결과</a>
+                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">빨강/초록 overlay</a>
+                  <a href={bakeResult.files.redDots.coordinates} target="_blank" rel="noreferrer">dot 좌표 JSON</a>
                 </div>
                 <div className="red-dot-previews">
                   <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">
-                    <span>Template 기준점</span>
-                    <img src={bakeResult.files.redDots.templateGuideSheet} alt="template red dot sheet" />
+                    <span>Template 빨간 1px</span>
+                    <img src={bakeResult.files.redDots.templateGuideSheet} alt="template red 1px dot sheet" />
                   </a>
                   <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">
-                    <span>Converted 기준점</span>
-                    <img src={bakeResult.files.redDots.convertedSheet} alt="converted red dot sheet" />
+                    <span>Converted 초록 1px</span>
+                    <img src={bakeResult.files.redDots.convertedSheet} alt="converted green 1px dot sheet" />
                   </a>
                   <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">
-                    <span>Overlay</span>
-                    <img src={bakeResult.files.redDots.overlaySheet} alt="red dot overlay sheet" />
+                    <span>Overlay 빨강=template / 초록=converted</span>
+                    <img src={bakeResult.files.redDots.overlaySheet} alt="red template and green converted dot overlay sheet" />
                   </a>
                 </div>
                 <div className="red-dot-upload">
                   <label>
-                    수동 보정한 red-dot PNG/PSD 선택
+                    수동 보정한 dot PNG/PSD 선택
                     <input
                       type="file"
                       accept=".png,.psd,image/png"

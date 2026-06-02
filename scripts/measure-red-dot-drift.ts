@@ -22,7 +22,10 @@ interface DotPoint {
 
 const cellWidth = 250;
 const cellHeight = 250;
-const redThreshold = { r: 240, gMax: 40, bMax: 40, aMin: 200 };
+const dotThresholds = {
+  red: { rMin: 240, gMax: 40, bMax: 40, aMin: 200 },
+  green: { rMax: 40, gMin: 240, bMax: 40, aMin: 200 },
+};
 
 const bakedCells: CellDef[] = [
   ...cells('걷기(한손)', 0, 0, 4),
@@ -137,11 +140,18 @@ function readImage(filePath: string): { width: number; height: number; rgba: Uin
   throw new Error(`Unsupported red-dot file type: ${filePath}`);
 }
 
-function isRedDotPixel(rgba: Uint8ClampedArray, offset: number): boolean {
-  return rgba[offset] >= redThreshold.r && rgba[offset + 1] <= redThreshold.gMax && rgba[offset + 2] <= redThreshold.bMax && rgba[offset + 3] >= redThreshold.aMin;
+type DotColor = keyof typeof dotThresholds;
+
+function isDotPixel(rgba: Uint8ClampedArray, offset: number, color: DotColor): boolean {
+  if (color === 'red') {
+    const threshold = dotThresholds.red;
+    return rgba[offset] >= threshold.rMin && rgba[offset + 1] <= threshold.gMax && rgba[offset + 2] <= threshold.bMax && rgba[offset + 3] >= threshold.aMin;
+  }
+  const threshold = dotThresholds.green;
+  return rgba[offset] <= threshold.rMax && rgba[offset + 1] >= threshold.gMin && rgba[offset + 2] <= threshold.bMax && rgba[offset + 3] >= threshold.aMin;
 }
 
-function findDotInCell(image: { width: number; height: number; rgba: Uint8ClampedArray }, cell: CellDef): DotPoint | null {
+function findDotInCell(image: { width: number; height: number; rgba: Uint8ClampedArray }, cell: CellDef, color: DotColor): DotPoint | null {
   const left = cell.col * cellWidth;
   const top = cell.row * cellHeight;
   let count = 0;
@@ -154,7 +164,7 @@ function findDotInCell(image: { width: number; height: number; rgba: Uint8Clampe
       const sheetX = left + x;
       if (sheetX < 0 || sheetX >= image.width) continue;
       const offset = (sheetY * image.width + sheetX) * 4;
-      if (!isRedDotPixel(image.rgba, offset)) continue;
+      if (!isDotPixel(image.rgba, offset, color)) continue;
       count += 1;
       sumX += sheetX;
       sumY += sheetY;
@@ -170,8 +180,8 @@ export function measureRedDotDrift(expectedPath: string, actualPath: string) {
   const expectedImage = readImage(expectedPath);
   const actualImage = readImage(actualPath);
   const frames = bakedCells.map((cell) => {
-    const expected = findDotInCell(expectedImage, cell);
-    const actual = findDotInCell(actualImage, cell);
+    const expected = findDotInCell(expectedImage, cell, 'red') ?? findDotInCell(expectedImage, cell, 'green');
+    const actual = findDotInCell(actualImage, cell, 'green') ?? findDotInCell(actualImage, cell, 'red');
     const delta = expected && actual ? { dx: actual.cellX - expected.cellX, dy: actual.cellY - expected.cellY } : null;
     return {
       key: `${cell.action}:${cell.frameIndex}`,
@@ -193,7 +203,7 @@ export function measureRedDotDrift(expectedPath: string, actualPath: string) {
     actualPath,
     cellWidth,
     cellHeight,
-    redThreshold,
+    dotThresholds,
     pass: failed.length === 0,
     comparedFrames: compared.length,
     missingFrames: frames.length - compared.length,

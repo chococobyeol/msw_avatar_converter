@@ -486,33 +486,22 @@ function overlayBuffers(base: Uint8ClampedArray, overlay: Uint8ClampedArray, ove
   return out;
 }
 
-function markRedDot(buffer: Uint8ClampedArray, width: number, height: number, x: number, y: number, color: [number, number, number, number] = [255, 0, 0, 255]): void {
+const templateDotColor: [number, number, number, number] = [255, 0, 0, 255];
+const convertedDotColor: [number, number, number, number] = [0, 255, 0, 255];
+
+function markDot(buffer: Uint8ClampedArray, width: number, height: number, x: number, y: number, color: [number, number, number, number]): void {
   const px = Math.round(x);
   const py = Math.round(y);
-  for (let dotY = py - 4; dotY <= py + 4; dotY += 1) {
-    if (dotY < 0 || dotY >= height) continue;
-    for (let dotX = px - 4; dotX <= px + 4; dotX += 1) {
-      if (dotX < 0 || dotX >= width || dotY < 0 || dotY >= height) continue;
-      const distance = Math.abs(dotX - px) + Math.abs(dotY - py);
-      const offset = (dotY * width + dotX) * 4;
-      if (distance === 5) {
-        buffer[offset] = 255;
-        buffer[offset + 1] = 255;
-        buffer[offset + 2] = 255;
-        buffer[offset + 3] = 255;
-        continue;
-      }
-      if (distance > 4) continue;
-      buffer[offset] = color[0];
-      buffer[offset + 1] = color[1];
-      buffer[offset + 2] = color[2];
-      buffer[offset + 3] = color[3];
-    }
-  }
+  if (px < 0 || px >= width || py < 0 || py >= height) return;
+  const offset = (py * width + px) * 4;
+  buffer[offset] = color[0];
+  buffer[offset + 1] = color[1];
+  buffer[offset + 2] = color[2];
+  buffer[offset + 3] = color[3];
 }
 
-function markCellRedDot(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, cell: BakedCell, anchor: Pick<Anchor, 'x' | 'y'>): void {
-  markRedDot(sheet, sheetWidth, sheetHeight, cell.col * cellWidth + anchor.x, cell.row * cellHeight + anchor.y);
+function markCellDot(sheet: Uint8ClampedArray, sheetWidth: number, sheetHeight: number, cell: BakedCell, anchor: Pick<Anchor, 'x' | 'y'>, color: [number, number, number, number]): void {
+  markDot(sheet, sheetWidth, sheetHeight, cell.col * cellWidth + anchor.x, cell.row * cellHeight + anchor.y, color);
 }
 
 function writeRedDotSheets(
@@ -560,11 +549,11 @@ function writeRedDotSheets(
   }));
   for (const record of records) {
     const cell = { action: record.action, frameIndex: record.frameIndex, col: record.col, row: record.row };
-    markCellRedDot(sourceRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
-    markCellRedDot(templateRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor);
-    markCellRedDot(convertedRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
-    markCellRedDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor);
-    markCellRedDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell);
+    markCellDot(sourceRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell, convertedDotColor);
+    markCellDot(templateRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor, templateDotColor);
+    markCellDot(convertedRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell, convertedDotColor);
+    markCellDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.targetAnchor, templateDotColor);
+    markCellDot(overlayRedDots, sheetWidth, sheetHeight, cell, record.actualAnchorInCell, convertedDotColor);
   }
   writeRgbaPng(path.join(outDir, 'red-dot-source-baked-sheet.png'), sheetWidth, sheetHeight, sourceRedDots);
   writeRgbaPng(path.join(outDir, 'red-dot-template-guide-sheet.png'), sheetWidth, sheetHeight, templateRedDots);
