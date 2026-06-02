@@ -208,6 +208,7 @@ const userOverlayFrameCorrections: Record<string, FrameCorrection> = {
 const manualFrameCorrections: Partial<Record<BakeTarget, Record<string, FrameCorrection>>> = {
   cape: userOverlayFrameCorrections,
   'cape-balloon': userOverlayFrameCorrections,
+  longcoat: userOverlayFrameCorrections,
 };
 
 const bakedCells: BakedCell[] = [
