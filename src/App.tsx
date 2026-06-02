@@ -51,7 +51,23 @@ interface BakeResult {
     outputPsd: string;
     bakedFrames: number;
     skippedFrames: number;
-    placement: Record<string, unknown>;
+    placement: {
+      placementValidation?: {
+        pass: boolean;
+        maxAbsDx: number;
+        maxAbsDy: number;
+        failedFrames?: number;
+        frames?: Array<{
+          key: string;
+          pass: boolean;
+          error?: { dx: number; dy: number };
+          cellFullyInsideSheet?: boolean;
+          anchorInsideSheet?: boolean;
+        }>;
+      };
+      redDotArtifacts?: Record<string, string>;
+      [key: string]: unknown;
+    };
     validation: {
       frameCellDiffPixels: number;
       frameCellMaxChannelDelta: number;
@@ -66,8 +82,34 @@ interface BakeResult {
     templateReferenceSheet: string;
     convertedEditableSheet: string;
     diff: string;
+    redDots?: {
+      sourceBakedSheet: string;
+      templateGuideSheet: string;
+      convertedSheet: string;
+      overlaySheet: string;
+      coordinates: string;
+    };
     motionComparisonGifs: BakeResultFile[];
   };
+}
+
+interface RedDotMeasurementResult {
+  pass: boolean;
+  comparedFrames: number;
+  missingFrames: number;
+  failedFrames: number;
+  maxAbsDx: number;
+  maxAbsDy: number;
+  files?: {
+    uploadedActual: string;
+    report: string;
+  };
+  frames: Array<{
+    key: string;
+    pass: boolean;
+    deltaActualMinusExpected: { dx: number; dy: number } | null;
+    suggestedCorrectionToApplyToActual: { dx: number; dy: number } | null;
+  }>;
 }
 
 function frameImageRef(frames: UiFrame[], parts: UiPart[], action: string, frameIndex: number): string | undefined {
@@ -129,6 +171,9 @@ export function App() {
   const [exportStatus, setExportStatus] = useState('not exported');
   const [bakeStatus, setBakeStatus] = useState('whole-avatar PSD not baked');
   const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
+  const [adjustedRedDotFile, setAdjustedRedDotFile] = useState<File | null>(null);
+  const [redDotMeasureStatus, setRedDotMeasureStatus] = useState('red-dot 비교 파일 없음');
+  const [redDotMeasureResult, setRedDotMeasureResult] = useState<RedDotMeasurementResult | null>(null);
   const grouped = useMemo(() => mappings.filter((mapping) => mapping.mode !== 'part' || mapping.groupId), [mappings]);
   const validation = useMemo(() => computeUiValidation(parts, frames, mappings), [parts, frames, mappings]);
   const sourceImageUrl = diagnostics.renderImageUrl ?? frames.find((frame) => frame.imageRef)?.imageRef;
@@ -267,11 +312,13 @@ export function App() {
       const frameCellDiffPixels = body.report.validation.frameCellDiffPixels;
       const frameCellMaxDelta = body.report.validation.frameCellMaxChannelDelta;
       const gifCount = body.report.validation.motionComparisonGifsGenerated;
-      setBakeStatus(`converted ${target}: baked=${bakedFrames}, skipped=${skippedFrames}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
+      const placement = body.report.placement.placementValidation;
+      setBakeStatus(`converted ${target}: baked=${bakedFrames}, skipped=${skippedFrames}, redDotPass=${placement?.pass ?? false}, redDotMax=${placement?.maxAbsDx ?? '-'},${placement?.maxAbsDy ?? '-'}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
       setImportLog((current) => [
         `GET /api/bake-meaegi target=${target} -> HTTP ${response.status}`,
         `convertedOutput=${body.report.outputPsd}`,
-        `placement=${JSON.stringify(body.report.placement)}`,
+        `redDotArtifacts=${JSON.stringify(body.files.redDots ?? {})}`,
+        `redDotPlacementValidation=${JSON.stringify(body.report.placement.placementValidation ?? {})}`,
         `motionComparisonGifs=${gifCount} first=${body.files.motionComparisonGifs.find((artifact) => artifact.gif)?.gif ?? '-'}`,
         `wholeAvatarBake bakedFrames=${bakedFrames} skippedFrames=${skippedFrames}`,
         `wholeAvatarFrameValidation frameCellDiffPixels=${frameCellDiffPixels} frameCellMaxDelta=${frameCellMaxDelta}`,
@@ -281,6 +328,43 @@ export function App() {
     } catch (error) {
       const message = `whole-avatar bake failed: ${(error as Error).message}`;
       setBakeStatus(message);
+      setImportLog((current) => [message, ...current]);
+    }
+  };
+
+  const compareAdjustedRedDots = async () => {
+    if (!bakeResult?.files.redDots?.templateGuideSheet) {
+      setRedDotMeasureStatus('먼저 red-dot bake 결과를 생성해야 합니다.');
+      return;
+    }
+    if (!adjustedRedDotFile) {
+      setRedDotMeasureStatus('비교할 수동 보정 PNG/PSD 파일을 선택해야 합니다.');
+      return;
+    }
+    setRedDotMeasureStatus(`comparing ${adjustedRedDotFile.name} against template red dots...`);
+    setRedDotMeasureResult(null);
+    try {
+      const response = await fetch(`/api/red-dot-measure?expected=${encodeURIComponent(bakeResult.files.redDots.templateGuideSheet)}`, {
+        method: 'POST',
+        headers: {
+          'x-file-name': adjustedRedDotFile.name,
+          'content-type': 'application/octet-stream',
+        },
+        body: adjustedRedDotFile,
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      setRedDotMeasureResult(body as RedDotMeasurementResult);
+      setRedDotMeasureStatus(`red-dot compare: pass=${body.pass}, failed=${body.failedFrames}, maxDx=${body.maxAbsDx}, maxDy=${body.maxAbsDy}`);
+      setImportLog((current) => [
+        `POST /api/red-dot-measure -> HTTP ${response.status}`,
+        `manualRedDotCompare pass=${body.pass} failed=${body.failedFrames} maxDx=${body.maxAbsDx} maxDy=${body.maxAbsDy}`,
+        `manualRedDotReport=${body.files?.report ?? '-'}`,
+        ...current,
+      ]);
+    } catch (error) {
+      const message = `red-dot compare failed: ${(error as Error).message}`;
+      setRedDotMeasureStatus(message);
       setImportLog((current) => [message, ...current]);
     }
   };
@@ -348,6 +432,15 @@ export function App() {
         </div>
         {bakeResult ? (
           <div className="bake-result">
+            {bakeResult.report.placement.placementValidation ? (
+              <div className={`red-dot-summary ${bakeResult.report.placement.placementValidation.pass ? 'pass' : 'fail'}`}>
+                <strong>Red-dot placement validation</strong>
+                <span>pass={String(bakeResult.report.placement.placementValidation.pass)}</span>
+                <span>maxDx={bakeResult.report.placement.placementValidation.maxAbsDx}</span>
+                <span>maxDy={bakeResult.report.placement.placementValidation.maxAbsDy}</span>
+                <span>failed={(bakeResult.report.placement.placementValidation.frames ?? []).filter((frame) => !frame.pass).length}</span>
+              </div>
+            ) : null}
             <div className="artifact-links">
               <a href={bakeResult.files.psd}>완성 PSD 다운로드</a>
               <a href={bakeResult.files.report} target="_blank" rel="noreferrer">validation-report.json</a>
@@ -357,6 +450,57 @@ export function App() {
               <a href={bakeResult.files.convertedEditableSheet} target="_blank" rel="noreferrer">Converted PSD sheet</a>
               <a href={bakeResult.files.diff} target="_blank" rel="noreferrer">source-vs-PSD diff</a>
             </div>
+            {bakeResult.files.redDots ? (
+              <section className="red-dot-panel">
+                <h3>Red-dot calibration files</h3>
+                <p className="muted">이 파일들이 실제 비교용 기준입니다. template red-dot와 converted/source red-dot를 열어서 수동 보정하거나, 보정한 PNG/PSD를 아래에 넣으면 좌표 차이를 계산합니다.</p>
+                <div className="artifact-links">
+                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">Template red-dot 기준</a>
+                  <a href={bakeResult.files.redDots.sourceBakedSheet} target="_blank" rel="noreferrer">Source baked red-dot</a>
+                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">Converted red-dot</a>
+                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">Red-dot overlay</a>
+                  <a href={bakeResult.files.redDots.coordinates} target="_blank" rel="noreferrer">red-dot 좌표 JSON</a>
+                </div>
+                <div className="red-dot-previews">
+                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">
+                    <span>Template 기준점</span>
+                    <img src={bakeResult.files.redDots.templateGuideSheet} alt="template red dot sheet" />
+                  </a>
+                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">
+                    <span>Converted 기준점</span>
+                    <img src={bakeResult.files.redDots.convertedSheet} alt="converted red dot sheet" />
+                  </a>
+                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">
+                    <span>Overlay</span>
+                    <img src={bakeResult.files.redDots.overlaySheet} alt="red dot overlay sheet" />
+                  </a>
+                </div>
+                <div className="red-dot-upload">
+                  <label>
+                    수동 보정한 red-dot PNG/PSD 선택
+                    <input
+                      type="file"
+                      accept=".png,.psd,image/png"
+                      onChange={(event) => setAdjustedRedDotFile(event.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                  <button disabled={!adjustedRedDotFile} onClick={compareAdjustedRedDots}>선택 파일 좌표 비교</button>
+                  <span aria-label="red-dot-measure-status">{redDotMeasureStatus}</span>
+                </div>
+                {redDotMeasureResult ? (
+                  <div className={`red-dot-summary ${redDotMeasureResult.pass ? 'pass' : 'fail'}`}>
+                    <strong>Manual red-dot measurement</strong>
+                    <span>pass={String(redDotMeasureResult.pass)}</span>
+                    <span>failed={redDotMeasureResult.failedFrames}</span>
+                    <span>missing={redDotMeasureResult.missingFrames}</span>
+                    <span>maxDx={redDotMeasureResult.maxAbsDx}</span>
+                    <span>maxDy={redDotMeasureResult.maxAbsDy}</span>
+                    {redDotMeasureResult.files?.report ? <a href={redDotMeasureResult.files.report} target="_blank" rel="noreferrer">measurement report</a> : null}
+                    <pre className="log">{redDotMeasureResult.frames.filter((frame) => !frame.pass).slice(0, 12).map((frame) => `${frame.key} delta=${JSON.stringify(frame.deltaActualMinusExpected)} apply=${JSON.stringify(frame.suggestedCorrectionToApplyToActual)}`).join('\n') || 'all red dots matched'}</pre>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
             <div className="comparison-gifs">
               {bakeResult.files.motionComparisonGifs.filter((artifact) => artifact.gif).slice(0, 8).map((artifact) => (
                 <a key={artifact.action} className="gif-card" href={artifact.gif ?? '#'} target="_blank" rel="noreferrer">
