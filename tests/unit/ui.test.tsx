@@ -80,9 +80,12 @@ test('mapped part bake payload sends only confirmed user mappings', () => {
 
 test('sample validation rejects invalid aggregate mapping semantics', () => {
   assert.equal(computeSampleValidation([]).pass, false);
-  assert.equal(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'hair', mode: 'group', groupId: 'solo', confirmed: true }))).pass, true);
-  assert.equal(computeSampleValidation([{ partId: sampleParts[0].id, targetPartId: 'hair', mode: 'group', groupId: 'solo', confirmed: true }]).pass, false);
+  assert.equal(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'cape', mode: 'group', groupId: 'solo', confirmed: true }))).pass, true);
+  assert.equal(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'hair', mode: 'group', groupId: 'solo', confirmed: true }))).pass, false);
+  assert.match(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'hair', mode: 'group', groupId: 'solo', confirmed: true }))).messages.join(' '), /cape\/cape-balloon\/longcoat/);
+  assert.equal(computeSampleValidation([{ partId: sampleParts[0].id, targetPartId: 'cape', mode: 'group', groupId: 'solo', confirmed: true }]).pass, false);
   assert.equal(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'longcoat', mode: 'whole-avatar', groupId: 'whole-avatar', confirmed: true }))).pass, true);
+  assert.equal(computeSampleValidation(sampleParts.map((part) => ({ partId: part.id, targetPartId: 'gloves', mode: 'whole-avatar', groupId: 'whole-avatar', confirmed: true }))).pass, false);
   assert.equal(computeSampleValidation(sampleParts.map((part, index) => ({ partId: part.id, targetPartId: index === 0 ? 'longcoat' : 'cape', mode: 'whole-avatar', groupId: 'whole-avatar', confirmed: true }))).pass, false);
   assert.equal(computeSampleValidation([
     { partId: sampleParts[0].id, targetPartId: 'longcoat', mode: 'whole-avatar', groupId: 'whole-avatar', confirmed: true },

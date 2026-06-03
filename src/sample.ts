@@ -38,6 +38,12 @@ export const targetParts = [
   'cape', 'cape-balloon', 'gloves', 'hair', 'longcoat', 'pants', 'shoes',
 ] as const;
 
+export const aggregateTargetParts = ['cape', 'cape-balloon', 'longcoat'] as const;
+
+export function isAggregateTargetPart(targetPartId: string): targetPartId is typeof aggregateTargetParts[number] {
+  return (aggregateTargetParts as readonly string[]).includes(targetPartId);
+}
+
 export const sampleParts: UiPart[] = [
   { id: 'body', label: '상의/몸통', category: 'top', color: '#60a5fa' },
   { id: 'weapon', label: '무기', category: 'weapon', color: '#f97316' },
@@ -97,19 +103,25 @@ export function computeUiValidation(parts: UiPart[], frames: UiFrame[], mappings
   const modeErrors = mappings.filter((mapping) => {
     if (mapping.mode === 'part') return Boolean(mapping.groupId);
     if (mapping.mode === 'group') return !mapping.groupId || (groupSizes.get(mapping.groupId) ?? 0) < 2;
-    if (mapping.mode === 'whole-avatar') return mapping.groupId !== 'whole-avatar';
+    if (mapping.mode === 'whole-avatar') return mapping.groupId !== 'whole-avatar' || !isAggregateTargetPart(mapping.targetPartId);
     return true;
   }).length;
+  const targetBuckets = new Map<string, UiMappingInput[]>();
+  for (const mapping of mappings) targetBuckets.set(mapping.targetPartId, [...(targetBuckets.get(mapping.targetPartId) ?? []), mapping]);
+  const duplicateTargetErrors = [...targetBuckets.entries()].filter(([targetPartId, rows]) => rows.length > 1 && !isAggregateTargetPart(targetPartId)).length;
+  const aggregateModeErrors = mappings.filter((mapping) => mapping.mode === 'group' && !isAggregateTargetPart(mapping.targetPartId)).length;
   const partFrameCoverageErrors = expectedPartIds.reduce((sum, partId) => sum + expectedKeys.filter((key) => {
     const [action, frameIndex] = key.split(':');
     return !frames.some((frame) => frame.partId === partId && frame.action === action && frame.frameIndex === Number(frameIndex));
   }).length, 0);
-  const semanticErrors = missingParts + duplicateParts + unknownParts + wholeAvatarErrors + modeErrors + partFrameCoverageErrors;
+  const semanticErrors = missingParts + duplicateParts + unknownParts + wholeAvatarErrors + modeErrors + duplicateTargetErrors + aggregateModeErrors + partFrameCoverageErrors;
   if (!confirmed) messages.push('Every source part must be confirmed before export.');
   if (missingParts) messages.push(`${missingParts} source part(s) are missing a mapping row.`);
   if (duplicateParts) messages.push(`${duplicateParts} duplicate mapping row(s) were found.`);
   if (unknownParts) messages.push(`${unknownParts} mapping row(s) reference unknown source parts.`);
   if (modeErrors) messages.push(`${modeErrors} mapping mode setting(s) are invalid.`);
+  if (duplicateTargetErrors) messages.push(`${duplicateTargetErrors} non-aggregate target(s) have multiple source parts. Multiple-source mapping is only allowed for cape/cape-balloon/longcoat.`);
+  if (aggregateModeErrors) messages.push(`${aggregateModeErrors} group mapping row(s) target non-aggregate parts. Use cape/cape-balloon/longcoat for grouped leftovers.`);
   if (partFrameCoverageErrors) messages.push(`${partFrameCoverageErrors} source part-frame coverage error(s) were found.`);
   const actualKeys = confirmed && semanticErrors === 0 ? expectedKeys : [];
   const missingFrames = expectedKeys.filter((key) => !actualKeys.includes(key)).length;

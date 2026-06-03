@@ -691,7 +691,7 @@ export function App() {
 
       <section className="panel">
         <h2><Layers size={18} /> Every-part Mapping</h2>
-        <p className="muted">파트별 export는 확인된 mapping row를 target+group 기준으로 묶어서 PSD를 각각 생성합니다. 2750x3500 motion-grid 계열과 300x180 cap/hair compact-slot 계열 모두 실제 PSD 레이어에 쓰고 readback diff로 검증합니다.</p>
+        <p className="muted">파트별 export는 기본 1:1 변환입니다. 같은 target에 여러 소스 파트를 묶는 중복 매핑은 cape/cape-balloon/longcoat 같은 케이프/전신 aggregate 타겟에서만 허용합니다. hair/cap/gloves/pants/shoes는 한 target당 한 소스 파트만 변환합니다.</p>
         <div className="table">
           <div className="row head"><span>Source part</span><span>Target MSW part</span><span>Mode</span><span>Group</span><span>Confirmed</span></div>
           {parts.map((part) => {

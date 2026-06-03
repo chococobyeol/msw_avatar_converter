@@ -3,6 +3,7 @@ import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { buildMeaegiShareImport, extractMeaegiShareId, MEAEGI_GET_SHARE_ACTION_ID, parseMeaegiFlight } from './src/meaegiShare.js';
+import { isAggregateTargetPart } from './src/sample.js';
 import { bakeMeaegiWholeAvatar, isBakeTarget, type BakeTarget, type FrameCorrection } from './scripts/bake-meaegi-whole-avatar.js';
 import { measureRedDotDrift } from './scripts/measure-red-dot-drift.js';
 
@@ -80,6 +81,27 @@ function groupMappingRows(rows: MappingExportRow[]) {
     groups.set(key, current);
   }
   return [...groups.values()];
+}
+
+function validateMappingMultiplicity(rows: MappingExportRow[]): string[] {
+  const confirmedRows = rows.filter((mapping) => mapping.confirmed !== false);
+  const errors: string[] = [];
+  const targetBuckets = new Map<string, MappingExportRow[]>();
+  for (const row of confirmedRows) targetBuckets.set(row.targetPartId, [...(targetBuckets.get(row.targetPartId) ?? []), row]);
+  for (const [target, targetRows] of targetBuckets.entries()) {
+    if (targetRows.length > 1 && !isAggregateTargetPart(target)) {
+      errors.push(`target ${target} has ${targetRows.length} source parts; duplicate target mapping is only allowed for cape/cape-balloon/longcoat.`);
+    }
+  }
+  for (const row of confirmedRows) {
+    if (row.mode === 'group' && !isAggregateTargetPart(row.targetPartId)) {
+      errors.push(`group mapping for ${row.partId} targets ${row.targetPartId}; grouped leftovers must target cape/cape-balloon/longcoat.`);
+    }
+    if (row.mode === 'whole-avatar' && !isAggregateTargetPart(row.targetPartId)) {
+      errors.push(`whole-avatar mapping for ${row.partId} targets ${row.targetPartId}; whole-avatar bakes must target cape/cape-balloon/longcoat.`);
+    }
+  }
+  return errors;
 }
 
 function readSavedCalibration(share: string, target: BakeTarget): Record<string, FrameCorrection> | undefined {
@@ -225,7 +247,10 @@ function meaegiSharePlugin(): Plugin {
           };
           const share = extractMeaegiShareId(body.share || '');
           if (!share) throw new Error('share is required.');
-          const groups = groupMappingRows(body.mappings ?? []);
+          const rows = body.mappings ?? [];
+          const multiplicityErrors = validateMappingMultiplicity(rows);
+          if (multiplicityErrors.length > 0) throw new Error(multiplicityErrors.join(' '));
+          const groups = groupMappingRows(rows);
           if (groups.length === 0) throw new Error('at least one confirmed mapping is required.');
           const runDir = newMappedBakeRunDir(share);
           mkdirSync(runDir, { recursive: true });
