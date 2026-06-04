@@ -136,7 +136,8 @@ const targetConfigs = {
     layout: 'compact-slots' as const,
     templatePath: 'avatartemplate/Avatar_Hair.psd',
     outputName: 'Avatar_Hair.psd',
-    removeZmapPreset: true,
+    removeZmapPreset: false,
+    rawHairZmapSource: true,
   },
   ...compactCapConfigs,
 } as const;
@@ -162,7 +163,11 @@ const referenceCalibrationShare = 'NvkIKXl2Xw64';
 const frameFetchConcurrency = 4;
 const frameFetchRetryAttempts = 4;
 const frameFetchTimeoutMs = 20_000;
+const meaegiRequestRetryAttempts = 4;
+const meaegiRequestTimeoutMs = 20_000;
 const frameCacheDir = path.join('artifacts', 'frame-cache');
+const meaegiSharePayloadCache = new Map<string, MeaegiAvatarPayload>();
+const meaegiHashCache = new Map<string, string>();
 
 function logProgress(message: string): void {
   process.stderr.write(`[bake] ${message}\n`);
@@ -351,19 +356,43 @@ function parseArgs() {
   };
 }
 
+
+async function postMeaegiActionText(actionId: string, body: unknown, label: string): Promise<string> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= meaegiRequestRetryAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), meaegiRequestTimeoutMs);
+    try {
+      const upstream = await fetch('https://meaegi.com/dressing-room', {
+        method: 'POST',
+        headers: {
+          'Next-Action': actionId,
+          'Content-Type': 'text/plain;charset=UTF-8',
+          Accept: 'text/x-component',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const text = await upstream.text();
+      if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
+      return text;
+    } catch (error) {
+      lastError = error;
+      if (attempt < meaegiRequestRetryAttempts) await sleep(500 * attempt * attempt);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw new Error(`${label} failed after ${meaegiRequestRetryAttempts} attempts (${fetchErrorSummary(lastError)})`);
+}
+
 async function fetchMeaegiSharePayload(share: string): Promise<MeaegiAvatarPayload> {
-  const upstream = await fetch('https://meaegi.com/dressing-room', {
-    method: 'POST',
-    headers: {
-      'Next-Action': MEAEGI_GET_SHARE_ACTION_ID,
-      'Content-Type': 'text/plain;charset=UTF-8',
-      Accept: 'text/x-component',
-    },
-    body: JSON.stringify([share]),
-  });
-  const text = await upstream.text();
-  if (!upstream.ok) throw new Error(`MeAegi returned HTTP ${upstream.status}.`);
-  return parseMeaegiFlight(text);
+  const cached = meaegiSharePayloadCache.get(share);
+  if (cached) return cached;
+  const text = await postMeaegiActionText(MEAEGI_GET_SHARE_ACTION_ID, [share], `MeAegi share fetch ${share}`);
+  const payload = parseMeaegiFlight(text);
+  meaegiSharePayloadCache.set(share, payload);
+  return payload;
 }
 
 function finiteItemEntries(avatar: MeaegiAvatarPayload): Array<[string, number]> {
@@ -411,18 +440,14 @@ function parseMeaegiHashFlight(text: string): string {
 }
 
 async function buildMeaegiHashFromSelectedParts(avatar: MeaegiAvatarPayload, selectedPartIds: string[]): Promise<string> {
-  const upstream = await fetch('https://meaegi.com/dressing-room', {
-    method: 'POST',
-    headers: {
-      'Next-Action': MEAEGI_BUILD_HASH_ACTION_ID,
-      'Content-Type': 'text/plain;charset=UTF-8',
-      Accept: 'text/x-component',
-    },
-    body: JSON.stringify([buildMeaegiHashParams(avatar, selectedPartIds)]),
-  });
-  const text = await upstream.text();
-  if (!upstream.ok) throw new Error(`MeAegi hash builder returned HTTP ${upstream.status}.`);
-  return parseMeaegiHashFlight(text);
+  const params = buildMeaegiHashParams(avatar, selectedPartIds);
+  const cacheKey = JSON.stringify(params);
+  const cached = meaegiHashCache.get(cacheKey);
+  if (cached) return cached;
+  const text = await postMeaegiActionText(MEAEGI_BUILD_HASH_ACTION_ID, [params], `MeAegi hash build parts=${selectedPartIds.join(',') || '(baseline)'}`);
+  const hash = parseMeaegiHashFlight(text);
+  meaegiHashCache.set(cacheKey, hash);
+  return hash;
 }
 
 async function loadMeaegiImport(share: string, selectedPartIds?: string[]) {
@@ -446,6 +471,8 @@ async function loadMeaegiImport(share: string, selectedPartIds?: string[]) {
       requestedPartIds: selectedPartIds ?? availablePartIds,
       availablePartIds,
       selectedPartIds: selected,
+      itemCodes: Object.fromEntries(finiteItemEntries(avatar)),
+      itemPrism: avatar.itemPrism ?? {},
       fullHash: avatar.hash ?? null,
       selectedHash: selectedAvatar.hash ?? null,
       baselineHash,
@@ -797,6 +824,57 @@ function renderTemplateReferenceSheet(psd: Psd): Uint8ClampedArray {
   });
 }
 
+function renderVisibleCompositeSheet(psd: Psd): Uint8ClampedArray {
+  return renderLayerSheet(psd, (entry) => {
+    const name = entry.layer.name ?? '';
+    if (entry.path.startsWith('data/') || entry.path === 'data') return false;
+    if (name.startsWith('guide_') || entry.path.includes('/guide_') || entry.path.includes('guide_character')) return false;
+    return Boolean(entry.layer.imageData?.data);
+  });
+}
+
+function updatePsdRootComposite(psd: Psd): Uint8ClampedArray {
+  const composite = renderVisibleCompositeSheet(psd);
+  psd.imageData = { width: psd.width, height: psd.height, data: composite };
+  return composite;
+}
+
+function validateRootComposite(psd: Psd, options: { allowOpaqueRootAlpha?: boolean } = {}): { pass: boolean; exactMatch: boolean; diffPixels: number; maxChannelDelta: number; alphaDiffPixels: number; rgbOnlyDiffPixels: number } {
+  const root = psd.imageData?.data
+    ? new Uint8ClampedArray(psd.imageData.data.buffer, psd.imageData.data.byteOffset, psd.imageData.data.byteLength)
+    : new Uint8ClampedArray(psd.width * psd.height * 4);
+  const composite = renderVisibleCompositeSheet(psd);
+  const diff = diffBuffers(psd.width, psd.height, composite, root);
+  let alphaDiffPixels = 0;
+  let rgbOnlyDiffPixels = 0;
+  let visibleRgbDiffPixels = 0;
+  let visibleRgbMaxDelta = 0;
+  for (let i = 0; i < root.length; i += 4) {
+    let rgbDelta = 0;
+    for (let channel = 0; channel < 3; channel += 1) {
+      rgbDelta = Math.max(rgbDelta, Math.abs(root[i + channel] - composite[i + channel]));
+    }
+    const alphaDelta = Math.abs(root[i + 3] - composite[i + 3]);
+    if (composite[i + 3] > 0) {
+      if (rgbDelta > 0) visibleRgbDiffPixels += 1;
+      visibleRgbMaxDelta = Math.max(visibleRgbMaxDelta, rgbDelta);
+    }
+    if (rgbDelta === 0 && alphaDelta === 0) continue;
+    if (alphaDelta > 0) alphaDiffPixels += 1;
+    else rgbOnlyDiffPixels += 1;
+  }
+  const opaqueAlphaOnly = options.allowOpaqueRootAlpha && root.every((_, index) => index % 4 !== 3 || root[index] === 255);
+  const alphaAdjustedPass = Boolean(opaqueAlphaOnly && visibleRgbDiffPixels === 0 && visibleRgbMaxDelta === 0);
+  return {
+    pass: diff.pass || alphaAdjustedPass || (alphaDiffPixels === 0 && diff.maxChannelDelta <= 16),
+    exactMatch: diff.pass,
+    diffPixels: diff.diffPixels,
+    maxChannelDelta: diff.maxChannelDelta,
+    alphaDiffPixels,
+    rgbOnlyDiffPixels,
+  };
+}
+
 function installSheetLayer(psd: Psd, layerPath: string, sheet: Uint8ClampedArray, expandTargetLayerToCanvas: boolean): void {
   const entries = flatten(psd.children);
   const target = entries.find((entry) => entry.path === layerPath)?.layer;
@@ -841,6 +919,43 @@ interface CompactSlot {
   sourceAnchor: Anchor;
   destLeft: number;
   destTop: number;
+  layerLeft?: number;
+  layerTop?: number;
+  layerWidth?: number;
+  layerHeight?: number;
+  layerData?: Uint8ClampedArray;
+}
+
+interface MapleStoryIoEffect {
+  image?: string;
+  origin?: { x?: number; y?: number; isEmpty?: boolean };
+  originOrZero?: { x?: number; y?: number; isEmpty?: boolean };
+  position?: string;
+}
+
+interface MapleStoryIoFrame {
+  effects?: Record<string, MapleStoryIoEffect>;
+}
+
+interface MapleStoryIoHairItem {
+  id?: number;
+  frameBooks?: Record<string, { frames?: MapleStoryIoFrame[] }>;
+}
+
+type HairEffectName = 'hairBelowBody' | 'hair' | 'hairOverHead' | 'hairShade' | 'backHair' | 'backHairBelowCap';
+
+interface RawHairLayerPlacement {
+  editPath: string;
+  frameBook: string;
+  frameIndex: number;
+  effectName: HairEffectName;
+  anchor: { x: number; y: number; basis: string };
+  origin: { x: number; y: number };
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  missingImage: boolean;
 }
 
 function compactPoseForLayerPath(layerPath: string): { action: string; frameIndex: number } {
@@ -946,21 +1061,495 @@ function compactSlotsForPsd(psd: Psd, referenceFrameByKey: Map<string, LoadedFra
 
 function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[]): Map<string, Uint8ClampedArray> {
   const entries = flatten(psd.children);
+  const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
   const expected = new Map<string, Uint8ClampedArray>();
   for (const entry of entries.filter((candidate) => candidate.path.includes('edithere:'))) {
     const layer = entry.layer;
-    const left = layer.left ?? 0;
-    const top = layer.top ?? 0;
-    const width = Math.max(1, (layer.right ?? left + 1) - left);
-    const height = Math.max(1, (layer.bottom ?? top + 1) - top);
-    const data = slots.some((slot) => slot.editPath === entry.path)
-      ? cropSheet(sheet, psd.width, psd.height, left, top, width, height)
+    const slot = slotByPath.get(entry.path);
+    const hasExpandedSlotData = Boolean(slot?.layerData && slot.layerLeft !== undefined && slot.layerTop !== undefined && slot.layerWidth !== undefined && slot.layerHeight !== undefined);
+    const left = hasExpandedSlotData ? slot!.layerLeft! : layer.left ?? 0;
+    const top = hasExpandedSlotData ? slot!.layerTop! : layer.top ?? 0;
+    const width = hasExpandedSlotData ? slot!.layerWidth! : Math.max(1, (layer.right ?? left + 1) - left);
+    const height = hasExpandedSlotData ? slot!.layerHeight! : Math.max(1, (layer.bottom ?? top + 1) - top);
+    const data = slot
+      ? slot.layerData && slot.layerData.length === width * height * 4
+        ? slot.layerData
+        : cropSheet(sheet, psd.width, psd.height, left, top, width, height)
       : new Uint8ClampedArray(width * height * 4);
     expected.set(entry.path, data);
+    layer.hidden = false;
+    layer.left = left;
+    layer.top = top;
+    layer.right = left + width;
+    layer.bottom = top + height;
     layer.imageData = { width, height, data };
   }
   hideGuides(psd.children);
   return expected;
+}
+
+function expandCompactSlotToSourceBounds(slot: CompactSlot, frame: LoadedFrame, sheetWidth: number, sheetHeight: number): Uint8ClampedArray {
+  const slotSheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+  drawFrameAt(slotSheet, sheetWidth, sheetHeight, frame, slot.destLeft, slot.destTop);
+  const bounds = alphaBounds(sheetWidth, sheetHeight, slotSheet);
+  if (bounds.empty) return slotSheet;
+  slot.layerLeft = bounds.left;
+  slot.layerTop = bounds.top;
+  slot.layerWidth = Math.max(1, bounds.right - bounds.left);
+  slot.layerHeight = Math.max(1, bounds.bottom - bounds.top);
+  slot.layerData = cropSheet(slotSheet, sheetWidth, sheetHeight, slot.layerLeft, slot.layerTop, slot.layerWidth, slot.layerHeight);
+  return slotSheet;
+}
+
+function maplestoryIoItemCachePath(itemId: number): string {
+  return path.join(frameCacheDir, `maplestory-io-KMS-389-item-${itemId}.json`);
+}
+
+async function fetchMapleStoryIoHairItem(itemId: number): Promise<MapleStoryIoHairItem> {
+  mkdirSync(frameCacheDir, { recursive: true });
+  const cachedPath = maplestoryIoItemCachePath(itemId);
+  if (existsSync(cachedPath)) return JSON.parse(readFileSync(cachedPath, 'utf8')) as MapleStoryIoHairItem;
+  const url = `https://maplestory.io/api/KMS/389/item/${itemId}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`MapleStory.io hair item fetch failed: ${url} -> HTTP ${response.status}`);
+  const item = await response.json() as MapleStoryIoHairItem;
+  if (!item.frameBooks) throw new Error(`MapleStory.io item ${itemId} did not include frameBooks.`);
+  writeFileSync(cachedPath, JSON.stringify(item));
+  return item;
+}
+
+function hairEffectNameForLayerPath(layerPath: string): HairEffectName {
+  const lower = layerPath.toLowerCase();
+  if (lower.includes('backhairbelowcap')) return 'backHairBelowCap';
+  if (lower.includes('backhair')) return 'backHair';
+  if (lower.includes('hairbelowbody')) return 'hairBelowBody';
+  if (lower.includes('hairoverhead')) return 'hairOverHead';
+  if (lower.includes('hairshade')) return 'hairShade';
+  if (/(^|[_:/])hair([_:/]|$)/i.test(layerPath)) return 'hair';
+  throw new Error(`Cannot map Hair template layer to a raw zmap effect: ${layerPath}`);
+}
+
+function hairFrameBookForLayerPath(layerPath: string): string {
+  const lower = layerPath.toLowerCase();
+  if (lower.includes('back')) return 'backDefault';
+  if (lower.includes('pronestab')) return 'proneStab';
+  return 'stand1';
+}
+
+function decodeMapleStoryIoEffectImage(effect: MapleStoryIoEffect): { width: number; height: number; rgba: Uint8ClampedArray } | null {
+  if (!effect.image) return null;
+  const base64 = effect.image.includes(',') ? effect.image.split(',').at(-1) ?? '' : effect.image;
+  const png = PNG.sync.read(Buffer.from(base64, 'base64'));
+  return { width: png.width, height: png.height, rgba: new Uint8ClampedArray(png.data.buffer, png.data.byteOffset, png.data.byteLength) };
+}
+
+function fallbackLayerImage(layer: Layer): { width: number; height: number; rgba: Uint8ClampedArray } {
+  const left = layer.left ?? 0;
+  const top = layer.top ?? 0;
+  const width = Math.max(1, layer.imageData?.width ?? ((layer.right ?? left + 1) - left));
+  const height = Math.max(1, layer.imageData?.height ?? ((layer.bottom ?? top + 1) - top));
+  const existing = layer.imageData?.data;
+  return {
+    width,
+    height,
+    rgba: existing && existing.length === width * height * 4
+      ? new Uint8ClampedArray(existing)
+      : new Uint8ClampedArray(width * height * 4),
+  };
+}
+
+function rawHairOriginPoints(psd: Psd): { front: { x: number; y: number }; back: { x: number; y: number } } {
+  const originLayer = flatten(psd.children).find((entry) => entry.path.includes('data:origin'))?.layer;
+  const image = originLayer?.imageData;
+  if (!originLayer || !image?.data) {
+    throw new Error('Avatar_Hair.psd is missing data:origin; cannot align raw Hair zmap layers safely.');
+  }
+  const data = image.data as Uint8ClampedArray;
+  const points: Array<{ x: number; y: number }> = [];
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      if (data[(y * image.width + x) * 4 + 3] === 0) continue;
+      points.push({ x: (originLayer.left ?? 0) + x, y: (originLayer.top ?? 0) + y });
+    }
+  }
+  if (points.length < 2) throw new Error('Avatar_Hair.psd data:origin must contain front and back anchor pixels.');
+  points.sort((a, b) => a.x - b.x || a.y - b.y);
+  return { front: points[0], back: points[points.length - 1] };
+}
+
+function rawHairAnchorForLayer(layerPath: string, origins: { front: { x: number; y: number }; back: { x: number; y: number } }): { x: number; y: number; basis: string } {
+  const isBack = hairFrameBookForLayerPath(layerPath) === 'backDefault';
+  const point = isBack ? origins.back : origins.front;
+  return {
+    x: point.x,
+    y: point.y,
+    basis: isBack ? 'Avatar_Hair.psd data:origin back pixel' : 'Avatar_Hair.psd data:origin front/prone pixel',
+  };
+}
+
+function applyRawHairZmapLayers(psd: Psd, slots: CompactSlot[], rawHair: MapleStoryIoHairItem): { sheet: Uint8ClampedArray; placements: RawHairLayerPlacement[] } {
+  const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
+  const origins = rawHairOriginPoints(psd);
+  const sheet = new Uint8ClampedArray(psd.width * psd.height * 4);
+  const placements: RawHairLayerPlacement[] = [];
+  for (const entry of flatten(psd.children).filter((candidate) => candidate.path.includes('edithere:'))) {
+    const slot = slotByPath.get(entry.path);
+    if (!slot) continue;
+    const effectName = hairEffectNameForLayerPath(entry.path);
+    const frameBook = hairFrameBookForLayerPath(entry.path);
+    const frameIndex = 0;
+    const effect = rawHair.frameBooks?.[frameBook]?.frames?.[frameIndex]?.effects?.[effectName];
+    if (!effect) throw new Error(`Raw Hair item ${rawHair.id ?? ''} is missing ${frameBook}[${frameIndex}].${effectName}`);
+    const decoded = decodeMapleStoryIoEffectImage(effect);
+    const image = decoded ?? fallbackLayerImage(entry.layer);
+    const origin = effect.origin && !effect.origin.isEmpty
+      ? { x: Math.round(effect.origin.x ?? 0), y: Math.round(effect.origin.y ?? 0) }
+      : { x: 0, y: 0 };
+    const anchor = rawHairAnchorForLayer(entry.path, origins);
+    slot.layerLeft = decoded ? Math.round(anchor.x - origin.x) : entry.layer.left ?? 0;
+    slot.layerTop = decoded ? Math.round(anchor.y - origin.y) : entry.layer.top ?? 0;
+    slot.layerWidth = image.width;
+    slot.layerHeight = image.height;
+    slot.layerData = image.rgba;
+    drawFrameAt(sheet, psd.width, psd.height, {
+      action: frameBook,
+      frameIndex,
+      imageRef: `maplestory.io:${rawHair.id ?? 'unknown'}:${frameBook}:${effectName}`,
+      width: image.width,
+      height: image.height,
+      rgba: image.rgba,
+      bounds: alphaBounds(image.width, image.height, image.rgba),
+    }, slot.layerLeft, slot.layerTop);
+    placements.push({
+      editPath: entry.path,
+      frameBook,
+      frameIndex,
+      effectName,
+      anchor,
+      origin,
+      left: slot.layerLeft,
+      top: slot.layerTop,
+      width: slot.layerWidth,
+      height: slot.layerHeight,
+      missingImage: !decoded,
+    });
+  }
+  return { sheet, placements };
+}
+
+interface ParsedPsdChannelInfo {
+  id: number;
+  length: number;
+  dataStart: number;
+}
+
+interface ParsedPsdLayerRecord {
+  index: number;
+  recordStart: number;
+  channelHeaderEnd: number;
+  recordEnd: number;
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+  channelCount: number;
+  channels: ParsedPsdChannelInfo[];
+  asciiName: string;
+  unicodeNames: string[];
+}
+
+interface ParsedPsdLayerInfo {
+  buffer: Buffer;
+  channels: number;
+  width: number;
+  height: number;
+  bitsPerChannel: number;
+  layerMaskStart: number;
+  layerMaskLength: number;
+  layerMaskEnd: number;
+  layerInfoLengthOffset: number;
+  layerInfoStart: number;
+  layerInfoLength: number;
+  layerInfoEnd: number;
+  countRaw: number;
+  records: ParsedPsdLayerRecord[];
+  channelDataStart: number;
+  channelDataEnd: number;
+}
+
+interface SurgicalPsdPatchStats {
+  rawLayerCount: number;
+  patchedLayerCount: number;
+  rootCompositeImagePatched: boolean;
+  preservedLayerIdMarkers: number;
+  preservedMetadataMarkers: { lyid: number; shmd: number; cust: number; eightBim: number };
+  outputBytes: number;
+}
+
+function countAsciiMarker(buffer: Buffer, marker: string): number {
+  let count = 0;
+  for (let index = 0; index <= buffer.length - marker.length; index += 1) {
+    if (buffer.toString('ascii', index, index + marker.length) === marker) count += 1;
+  }
+  return count;
+}
+
+function psdMarkerStats(buffer: Buffer): { lyid: number; shmd: number; cust: number; eightBim: number } {
+  return {
+    lyid: countAsciiMarker(buffer, 'lyid'),
+    shmd: countAsciiMarker(buffer, 'shmd'),
+    cust: countAsciiMarker(buffer, 'cust'),
+    eightBim: countAsciiMarker(buffer, '8BIM'),
+  };
+}
+
+function readUnicodeLayerNames(buffer: Buffer): string[] {
+  const names: string[] = [];
+  for (let offset = 0; offset <= buffer.length - 12; offset += 1) {
+    const signature = buffer.toString('ascii', offset, offset + 4);
+    if (signature !== '8BIM' && signature !== '8B64') continue;
+    const key = buffer.toString('ascii', offset + 4, offset + 8);
+    if (key !== 'luni') continue;
+    const length = buffer.readUInt32BE(offset + 8);
+    const start = offset + 12;
+    if (length < 4 || start + length > buffer.length) continue;
+    const chars = buffer.readUInt32BE(start);
+    if (chars > 1000 || start + 4 + chars * 2 > start + length) continue;
+    let text = '';
+    for (let index = 0; index < chars; index += 1) text += String.fromCharCode(buffer.readUInt16BE(start + 4 + index * 2));
+    names.push(text);
+  }
+  return names;
+}
+
+function readPascalLayerName(buffer: Buffer, offset: number): { text: string; end: number } {
+  const length = buffer[offset] ?? 0;
+  const rawLength = 1 + length;
+  const paddedLength = rawLength + ((4 - (rawLength % 4)) % 4);
+  return { text: buffer.toString('ascii', offset + 1, offset + 1 + length), end: offset + paddedLength };
+}
+
+function parsePsdLayerInfo(buffer: Buffer): ParsedPsdLayerInfo {
+  let offset = 0;
+  const signature = buffer.toString('ascii', offset, offset + 4); offset += 4;
+  if (signature !== '8BPS') throw new Error('Template is not a PSD file.');
+  const version = buffer.readUInt16BE(offset); offset += 2;
+  if (version !== 1) throw new Error(`Unsupported PSD version ${version}; only PSD v1 is supported.`);
+  offset += 6;
+  const channels = buffer.readUInt16BE(offset); offset += 2;
+  const height = buffer.readUInt32BE(offset); offset += 4;
+  const width = buffer.readUInt32BE(offset); offset += 4;
+  const bitsPerChannel = buffer.readUInt16BE(offset); offset += 2;
+  offset += 2; // color mode
+  const colorModeLength = buffer.readUInt32BE(offset); offset += 4 + colorModeLength;
+  const imageResourcesLength = buffer.readUInt32BE(offset); offset += 4 + imageResourcesLength;
+  const layerMaskStart = offset;
+  const layerMaskLength = buffer.readUInt32BE(offset); offset += 4;
+  const layerMaskEnd = offset + layerMaskLength;
+  const layerInfoLengthOffset = offset;
+  const layerInfoLength = buffer.readUInt32BE(offset); offset += 4;
+  const layerInfoStart = offset;
+  const layerInfoEnd = layerInfoStart + layerInfoLength;
+  if (layerInfoEnd > layerMaskEnd || layerMaskEnd > buffer.length) throw new Error('PSD layer/mask section lengths are invalid.');
+  let cursor = layerInfoStart;
+  const countRaw = buffer.readInt16BE(cursor); cursor += 2;
+  const layerCount = Math.abs(countRaw);
+  const records: ParsedPsdLayerRecord[] = [];
+  for (let index = 0; index < layerCount; index += 1) {
+    const recordStart = cursor;
+    const top = buffer.readInt32BE(cursor); cursor += 4;
+    const left = buffer.readInt32BE(cursor); cursor += 4;
+    const bottom = buffer.readInt32BE(cursor); cursor += 4;
+    const right = buffer.readInt32BE(cursor); cursor += 4;
+    const channelCount = buffer.readUInt16BE(cursor); cursor += 2;
+    const channels: ParsedPsdChannelInfo[] = [];
+    for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+      const id = buffer.readInt16BE(cursor); cursor += 2;
+      const length = buffer.readUInt32BE(cursor); cursor += 4;
+      channels.push({ id, length, dataStart: 0 });
+    }
+    const channelHeaderEnd = cursor;
+    cursor += 4; // blend signature
+    cursor += 4; // blend mode
+    cursor += 1; // opacity
+    cursor += 1; // clipping
+    cursor += 1; // flags
+    cursor += 1; // filler
+    const extraLength = buffer.readUInt32BE(cursor); cursor += 4;
+    const extraStart = cursor;
+    const extraEnd = extraStart + extraLength;
+    const extra = buffer.subarray(extraStart, extraEnd);
+    let asciiName = '';
+    try {
+      const maskLength = extra.readUInt32BE(0);
+      let extraCursor = 4 + maskLength;
+      const blendingRangesLength = extra.readUInt32BE(extraCursor);
+      extraCursor += 4 + blendingRangesLength;
+      asciiName = readPascalLayerName(buffer, extraStart + extraCursor).text;
+    } catch {
+      asciiName = '';
+    }
+    records.push({
+      index,
+      recordStart,
+      channelHeaderEnd,
+      recordEnd: extraEnd,
+      top,
+      left,
+      bottom,
+      right,
+      channelCount,
+      channels,
+      asciiName,
+      unicodeNames: readUnicodeLayerNames(extra),
+    });
+    cursor = extraEnd;
+  }
+  const channelDataStart = cursor;
+  for (const record of records) {
+    for (const channel of record.channels) {
+      channel.dataStart = cursor;
+      cursor += channel.length;
+    }
+  }
+  if (cursor > layerInfoEnd) throw new Error('PSD channel data exceeds layer info section.');
+  return { buffer, channels, width, height, bitsPerChannel, layerMaskStart, layerMaskLength, layerMaskEnd, layerInfoLengthOffset, layerInfoStart, layerInfoLength, layerInfoEnd, countRaw, records, channelDataStart, channelDataEnd: cursor };
+}
+
+function layerRecordName(record: ParsedPsdLayerRecord): string {
+  return record.unicodeNames.find((name) => name.length > 0) ?? record.asciiName;
+}
+
+function writeRawPsdChannel(rgba: Uint8ClampedArray, width: number, height: number, channelId: number): Buffer {
+  const out = Buffer.allocUnsafe(2 + width * height);
+  out.writeUInt16BE(0, 0);
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const sourceOffset = pixel * 4;
+    const targetOffset = 2 + pixel;
+    if (channelId === -1) out[targetOffset] = rgba[sourceOffset + 3];
+    else if (channelId === 0) out[targetOffset] = rgba[sourceOffset];
+    else if (channelId === 1) out[targetOffset] = rgba[sourceOffset + 1];
+    else if (channelId === 2) out[targetOffset] = rgba[sourceOffset + 2];
+    else out[targetOffset] = 0;
+  }
+  return out;
+}
+
+
+function writeRawCompositeImageData(rgba: Uint8ClampedArray, width: number, height: number, channels: number): Buffer {
+  const pixelCount = width * height;
+  const out = Buffer.allocUnsafe(2 + pixelCount * channels);
+  out.writeUInt16BE(0, 0);
+  for (let channel = 0; channel < channels; channel += 1) {
+    for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+      const sourceOffset = pixel * 4;
+      const targetOffset = 2 + channel * pixelCount + pixel;
+      out[targetOffset] = channel === 0
+        ? rgba[sourceOffset]
+        : channel === 1
+        ? rgba[sourceOffset + 1]
+        : channel === 2
+        ? rgba[sourceOffset + 2]
+        : channel === 3
+        ? rgba[sourceOffset + 3]
+        : 0;
+    }
+  }
+  return out;
+}
+
+function compactSlotLayerName(slot: CompactSlot): string {
+  return slot.editPath.split('/').at(-1) ?? slot.editPath;
+}
+
+function writeSurgicalCompactPsd(templatePath: string, outputPath: string, slots: CompactSlot[], rootComposite?: Uint8ClampedArray): SurgicalPsdPatchStats {
+  const templateBuffer = readFileSync(templatePath);
+  const parsed = parsePsdLayerInfo(templateBuffer);
+  const patchByLayerName = new Map<string, CompactSlot>();
+  for (const slot of slots) {
+    if (!slot.layerData || slot.layerLeft === undefined || slot.layerTop === undefined || slot.layerWidth === undefined || slot.layerHeight === undefined) continue;
+    patchByLayerName.set(compactSlotLayerName(slot), slot);
+  }
+  let patchedLayerCount = 0;
+  const recordsOut: Buffer[] = [];
+  const channelDataOut: Buffer[] = [];
+  const countBuffer = Buffer.alloc(2);
+  countBuffer.writeInt16BE(parsed.countRaw, 0);
+  recordsOut.push(countBuffer);
+  for (const record of parsed.records) {
+    const name = layerRecordName(record);
+    const patch = patchByLayerName.get(name);
+    const left = patch?.layerLeft ?? record.left;
+    const top = patch?.layerTop ?? record.top;
+    const width = patch?.layerWidth ?? Math.max(0, record.right - record.left);
+    const height = patch?.layerHeight ?? Math.max(0, record.bottom - record.top);
+    const right = left + width;
+    const bottom = top + height;
+    if (patch) patchedLayerCount += 1;
+
+    const recordHeader = Buffer.alloc(18 + record.channelCount * 6);
+    let cursor = 0;
+    recordHeader.writeInt32BE(top, cursor); cursor += 4;
+    recordHeader.writeInt32BE(left, cursor); cursor += 4;
+    recordHeader.writeInt32BE(bottom, cursor); cursor += 4;
+    recordHeader.writeInt32BE(right, cursor); cursor += 4;
+    recordHeader.writeUInt16BE(record.channelCount, cursor); cursor += 2;
+    for (const channel of record.channels) {
+      const channelBuffer = patch && channel.id >= -1 && channel.id <= 2
+        ? writeRawPsdChannel(patch.layerData!, width, height, channel.id)
+        : templateBuffer.subarray(channel.dataStart, channel.dataStart + channel.length);
+      recordHeader.writeInt16BE(channel.id, cursor); cursor += 2;
+      recordHeader.writeUInt32BE(channelBuffer.length, cursor); cursor += 4;
+      channelDataOut.push(Buffer.from(channelBuffer));
+    }
+    recordsOut.push(recordHeader, templateBuffer.subarray(record.channelHeaderEnd, record.recordEnd));
+  }
+  const preservedLayerInfoSuffix = templateBuffer.subarray(parsed.channelDataEnd, parsed.layerInfoEnd);
+  let layerInfoData = Buffer.concat([...recordsOut, ...channelDataOut, preservedLayerInfoSuffix]);
+  if (layerInfoData.length % 2 !== 0) layerInfoData = Buffer.concat([layerInfoData, Buffer.from([0])]);
+  const layerInfoLengthBuffer = Buffer.alloc(4);
+  layerInfoLengthBuffer.writeUInt32BE(layerInfoData.length, 0);
+  const preservedLayerMaskSuffix = templateBuffer.subarray(parsed.layerInfoEnd, parsed.layerMaskEnd);
+  const layerMaskData = Buffer.concat([layerInfoLengthBuffer, layerInfoData, preservedLayerMaskSuffix]);
+  const layerMaskLengthBuffer = Buffer.alloc(4);
+  layerMaskLengthBuffer.writeUInt32BE(layerMaskData.length, 0);
+  const output = Buffer.concat([
+    templateBuffer.subarray(0, parsed.layerMaskStart),
+    layerMaskLengthBuffer,
+    layerMaskData,
+    rootComposite && parsed.bitsPerChannel === 8 && rootComposite.length === parsed.width * parsed.height * 4
+      ? writeRawCompositeImageData(rootComposite, parsed.width, parsed.height, parsed.channels)
+      : templateBuffer.subarray(parsed.layerMaskEnd),
+  ]);
+  writeFileSync(outputPath, output);
+  const stats = psdMarkerStats(output);
+  return {
+    rawLayerCount: parsed.records.length,
+    patchedLayerCount,
+    rootCompositeImagePatched: Boolean(rootComposite && parsed.bitsPerChannel === 8 && rootComposite.length === parsed.width * parsed.height * 4),
+    preservedLayerIdMarkers: stats.lyid,
+    preservedMetadataMarkers: stats,
+    outputBytes: output.length,
+  };
+}
+
+
+
+function validateEditableLayersNonEmpty(psd: Psd): { pass: boolean; emptyLayers: string[]; layers: Array<{ path: string; alphaPixels: number }> } {
+  const layers = flatten(psd.children)
+    .filter((entry) => entry.path.includes('edithere:'))
+    .map((entry) => {
+      const data = entry.layer.imageData?.data;
+      let alphaPixels = 0;
+      if (data) {
+        for (let offset = 3; offset < data.length; offset += 4) {
+          if (data[offset] > 0) alphaPixels += 1;
+        }
+      }
+      return { path: entry.path, alphaPixels };
+    });
+  const emptyLayers = layers.filter((layer) => layer.alphaPixels === 0).map((layer) => layer.path);
+  return { pass: emptyLayers.length === 0, emptyLayers, layers };
 }
 
 function validateCompactLayerReadback(expectedLayers: Map<string, Uint8ClampedArray>, readback: Psd) {
@@ -1418,19 +2007,44 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   const originalTemplateEditableSheet = renderEditableSheet(psd);
   if (!isFullGridTargetConfig(config)) {
     const slots = compactSlotsForPsd(psd, referenceFrameByKey);
-    const sheet = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
-    for (const slot of slots) {
-      const key = `${slot.action}:${slot.frameIndex}`;
-      const frame = frameByKey.get(key);
-      if (!frame) throw new Error(`Missing compact source frame ${key} for ${slot.editPath}`);
-      drawFrameAt(sheet, sheetWidth, sheetHeight, frame, slot.destLeft, slot.destTop);
+    const useRawHairZmapSource = 'rawHairZmapSource' in config && config.rawHairZmapSource === true;
+    let rawHairItemId: number | null = null;
+    let rawHairPlacements: RawHairLayerPlacement[] = [];
+    let sheet: Uint8ClampedArray = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
+    if (useRawHairZmapSource) {
+      const hairItemCode = imported.selection.itemCodes.hair;
+      if (!Number.isFinite(hairItemCode)) throw new Error('Hair target bake requires a selected MeAegi hair item code.');
+      rawHairItemId = hairItemCode;
+      logProgress(`loading raw Hair zmap item ${rawHairItemId} from MapleStory.io`);
+      const rawHair = await fetchMapleStoryIoHairItem(rawHairItemId);
+      const rawResult = applyRawHairZmapLayers(psd, slots, rawHair);
+      sheet = rawResult.sheet;
+      rawHairPlacements = rawResult.placements;
+    } else {
+      const expandCompactSlotsToSourceBounds = 'expandCompactSlotsToSourceBounds' in config && config.expandCompactSlotsToSourceBounds === true;
+      for (const slot of slots) {
+        const key = `${slot.action}:${slot.frameIndex}`;
+        const frame = frameByKey.get(key);
+        if (!frame) throw new Error(`Missing compact source frame ${key} for ${slot.editPath}`);
+        if (expandCompactSlotsToSourceBounds) {
+          const slotSheet = expandCompactSlotToSourceBounds(slot, frame, sheetWidth, sheetHeight);
+          for (let i = 0; i < sheet.length; i += 4) over(sheet, i, slotSheet, i);
+        } else {
+          drawFrameAt(sheet, sheetWidth, sheetHeight, frame, slot.destLeft, slot.destTop);
+        }
+      }
     }
     const expectedLayers = installCompactSlotLayers(psd, sheet, slots);
     if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
+    const expectedRootComposite = updatePsdRootComposite(psd);
     mkdirSync(outDir, { recursive: true });
     const psdPath = path.join(outDir, config.outputName);
     logProgress(`writing compact PSD ${psdPath}`);
-    writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
+    const surgicalPsdPatch = useRawHairZmapSource
+      ? writeSurgicalCompactPsd(config.templatePath, psdPath, slots, expectedRootComposite)
+      : null;
+    if (!surgicalPsdPatch) writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
+    writeRgbaPng(path.join(outDir, 'expected-root-composite.png'), sheetWidth, sheetHeight, expectedRootComposite);
     writeRgbaPng(path.join(outDir, 'expected-sheet.png'), sheetWidth, sheetHeight, sheet);
     writeRgbaPng(path.join(outDir, 'original-template-guide-sheet.png'), sheetWidth, sheetHeight, originalTemplateGuideSheet);
     writeRgbaPng(path.join(outDir, 'original-template-reference-sheet.png'), sheetWidth, sheetHeight, originalTemplateReferenceSheet);
@@ -1438,6 +2052,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
 
     const readback = readPsd(readFileSync(psdPath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
     const layerValidation = validateCompactLayerReadback(expectedLayers, readback);
+    const rootCompositeValidation = validateRootComposite(readback, { allowOpaqueRootAlpha: Boolean(surgicalPsdPatch) });
+    const nonEmptyLayerValidation = validateEditableLayersNonEmpty(readback);
     const convertedEditableSheet = renderEditableSheet(readback);
     writeRgbaPng(path.join(outDir, 'converted-editable-sheet.png'), sheetWidth, sheetHeight, convertedEditableSheet);
     writeRgbaPng(path.join(outDir, 'readback-layer.png'), sheetWidth, sheetHeight, convertedEditableSheet);
@@ -1499,6 +2115,10 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         anchor: 'compact-template-guide-character-anchor-matched-to-reference-meaegi-body-anchor',
         zmapPresetRemoved: config.removeZmapPreset,
         targetLayerPromotedToTop: false,
+        compactSlotLayersExpandedToSourceBounds: false,
+        rawHairZmapSource: useRawHairZmapSource,
+        rawHairItemId,
+        rawHairPlacements,
         fixedFramePlacementOffset: null,
         manualFrameCorrections: [],
         compactSlots: slots.map((slot) => ({
@@ -1518,6 +2138,19 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         readbackLayerExactMatch: layerValidation.pass,
         diffPixels: layerValidation.totalDiffPixels,
         maxChannelDelta: layerValidation.maxChannelDelta,
+        rootCompositePass: rootCompositeValidation.pass,
+        rootCompositeExactMatch: rootCompositeValidation.exactMatch,
+        rootCompositeDiffPixels: rootCompositeValidation.diffPixels,
+        rootCompositeMaxChannelDelta: rootCompositeValidation.maxChannelDelta,
+        rootCompositeAlphaDiffPixels: rootCompositeValidation.alphaDiffPixels,
+        rootCompositeRgbOnlyDiffPixels: rootCompositeValidation.rgbOnlyDiffPixels,
+        templateMetadataPreserved: surgicalPsdPatch ? surgicalPsdPatch.preservedMetadataMarkers.lyid === surgicalPsdPatch.rawLayerCount && surgicalPsdPatch.preservedMetadataMarkers.shmd === surgicalPsdPatch.rawLayerCount && surgicalPsdPatch.preservedMetadataMarkers.cust === surgicalPsdPatch.rawLayerCount : null,
+        editableLayersNonEmpty: nonEmptyLayerValidation.pass,
+        emptyEditableLayers: nonEmptyLayerValidation.emptyLayers,
+        editableLayerAlphaPixels: nonEmptyLayerValidation.layers,
+        rawPhysicalLayerCount: surgicalPsdPatch?.rawLayerCount ?? null,
+        patchedPhysicalLayerCount: surgicalPsdPatch?.patchedLayerCount ?? null,
+        preservedMetadataMarkers: surgicalPsdPatch?.preservedMetadataMarkers ?? null,
         frameCellsPass: layerValidation.pass,
         frameCellDiffPixels: layerValidation.totalDiffPixels,
         frameCellMaxChannelDelta: layerValidation.maxChannelDelta,
@@ -1527,7 +2160,9 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         motionComparisons: [] as ComparisonArtifact[],
       },
       warnings: [
-        imported.selection.baselineMaskApplied
+        useRawHairZmapSource
+          ? 'Hair compact bake preserves Avatar_Hair.psd data:use_zmap_preset/data:vslot/data:origin and writes MapleStory raw Hair effects into the matching hairBelowBody/hair/hairOverHead/backHair zmap layers. If MapleStory raw data omits an MSW-required slot such as hairShade, the original non-empty template slot is preserved so MSW does not reject Hair/Cap as blank.'
+          : imported.selection.baselineMaskApplied
           ? 'Selective compact bake is active: selected-part render frames are alpha-masked against the MeAegi default baseline so excluded pixels become transparent.'
           : 'This compact template bake writes selected source pixels into every edithere slot of a 300x180 cap/hair style PSD.',
         'Compact cap/hair templates do not contain the 90-frame full motion grid; they contain named edit slots, so validation is per editable layer readback plus guide-anchor red dots.',
@@ -1560,11 +2195,13 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   installSheetLayer(psd, config.editLayerPath, sheet, config.expandTargetLayerToCanvas);
   if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
   if (config.promoteTargetLayerToTop) promoteLayerToTop(psd, config.editLayerPath);
+  const expectedRootComposite = updatePsdRootComposite(psd);
   mkdirSync(outDir, { recursive: true });
   const psdPath = path.join(outDir, config.outputName);
   logProgress(`writing PSD ${psdPath}`);
   writeFileSync(psdPath, writePsdBuffer(psd, { generateThumbnail: false, trimImageData: false }));
   logProgress('writing sheet PNG artifacts');
+  writeRgbaPng(path.join(outDir, 'expected-root-composite.png'), sheetWidth, sheetHeight, expectedRootComposite);
   writeRgbaPng(path.join(outDir, 'expected-sheet.png'), sheetWidth, sheetHeight, sheet);
   writeRgbaPng(path.join(outDir, 'reference-alignment-sheet.png'), sheetWidth, sheetHeight, referenceAlignmentSheet);
   writeRgbaPng(path.join(outDir, 'reference-guide-overlay-sheet.png'), sheetWidth, sheetHeight, overlayBuffers(originalTemplateGuideSheet, referenceAlignmentSheet, 0.75));
@@ -1575,6 +2212,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   logProgress('reading generated PSD back for validation');
   psd.children = undefined;
   const readback = readPsd(readFileSync(psdPath), { useImageData: true, skipThumbnail: true, skipLinkedFilesData: true });
+  const rootCompositeValidation = validateRootComposite(readback);
   const editLayerName = config.editLayerPath.split('/').at(-1);
   const readbackLayer = flatten(readback.children).find((entry) =>
     entry.path === config.editLayerPath ||
@@ -1648,6 +2286,12 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       readbackLayerExactMatch: frameValidation.pass,
       diffPixels: diff.diffPixels,
       maxChannelDelta: diff.maxChannelDelta,
+      rootCompositePass: rootCompositeValidation.pass,
+      rootCompositeExactMatch: rootCompositeValidation.exactMatch,
+      rootCompositeDiffPixels: rootCompositeValidation.diffPixels,
+      rootCompositeMaxChannelDelta: rootCompositeValidation.maxChannelDelta,
+      rootCompositeAlphaDiffPixels: rootCompositeValidation.alphaDiffPixels,
+      rootCompositeRgbOnlyDiffPixels: rootCompositeValidation.rgbOnlyDiffPixels,
       frameCellsPass: frameValidation.pass,
       frameCellDiffPixels: frameValidation.totalDiffPixels,
       frameCellMaxChannelDelta: frameValidation.maxChannelDelta,
@@ -1686,6 +2330,11 @@ async function main() {
       readbackLayerExactMatch: report.validation.readbackLayerExactMatch,
       diffPixels: report.validation.diffPixels,
       maxChannelDelta: report.validation.maxChannelDelta,
+      rootCompositePass: report.validation.rootCompositePass,
+      rootCompositeExactMatch: report.validation.rootCompositeExactMatch,
+      rootCompositeDiffPixels: report.validation.rootCompositeDiffPixels,
+      rootCompositeMaxChannelDelta: report.validation.rootCompositeMaxChannelDelta,
+      rootCompositeAlphaDiffPixels: report.validation.rootCompositeAlphaDiffPixels,
       frameCellsPass: report.validation.frameCellsPass,
       frameCellDiffPixels: report.validation.frameCellDiffPixels,
       motionComparisonGifsGenerated: report.validation.motionComparisonGifsGenerated,
