@@ -75,6 +75,7 @@ const compactCapConfigs = Object.fromEntries(Object.entries(capTemplateFiles).ma
   templatePath: `avatartemplate/${file}`,
   outputName: file,
   removeZmapPreset: true,
+  expandCompactSlotsToSourceBounds: true,
   preserveTemplateSlotWhenSparse: true,
 }]));
 
@@ -925,7 +926,7 @@ interface CompactSlot {
   layerWidth?: number;
   layerHeight?: number;
   layerData?: Uint8ClampedArray;
-  fallbackTemplateSlot?: { alphaPixels: number; reason: string };
+  fallbackTemplateSlot?: { alphaPixels: number; reason: string; source: 'converted-donor' | 'template'; donorEditPath?: string };
 }
 
 interface MapleStoryIoEffect {
@@ -1070,10 +1071,70 @@ function rgbaAlphaPixels(rgba: Uint8ClampedArray): number {
   return alphaPixels;
 }
 
+interface CompactLayerInstallRecord {
+  entryPath: string;
+  layer: Layer;
+  slot?: CompactSlot;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  renderedAlpha: number;
+  template: { width: number; height: number; rgba: Uint8ClampedArray };
+  templateAlpha: number;
+}
+
+function copyDonorPixelsIntoTargetSlot(donor: CompactLayerInstallRecord, target: CompactLayerInstallRecord): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(target.width * target.height * 4);
+  for (let y = 0; y < donor.height; y += 1) {
+    const targetY = donor.top + y - target.top;
+    if (targetY < 0 || targetY >= target.height) continue;
+    for (let x = 0; x < donor.width; x += 1) {
+      const targetX = donor.left + x - target.left;
+      if (targetX < 0 || targetX >= target.width) continue;
+      const sourceOffset = (y * donor.width + x) * 4;
+      if (donor.data[sourceOffset + 3] === 0) continue;
+      const targetOffset = (targetY * target.width + targetX) * 4;
+      out[targetOffset] = donor.data[sourceOffset];
+      out[targetOffset + 1] = donor.data[sourceOffset + 1];
+      out[targetOffset + 2] = donor.data[sourceOffset + 2];
+      out[targetOffset + 3] = donor.data[sourceOffset + 3];
+    }
+  }
+  if (rgbaAlphaPixels(out) > 0) return out;
+
+  const donorBounds = alphaBounds(donor.width, donor.height, donor.data);
+  if (donorBounds.empty) return out;
+  const donorCenterX = Math.round((donorBounds.left + donorBounds.right - 1) / 2);
+  const donorCenterY = Math.round((donorBounds.top + donorBounds.bottom - 1) / 2);
+  const targetCenterX = Math.round((target.width - 1) / 2);
+  const targetCenterY = Math.round((target.height - 1) / 2);
+  const dx = targetCenterX - donorCenterX;
+  const dy = targetCenterY - donorCenterY;
+  for (let y = donorBounds.top; y < donorBounds.bottom; y += 1) {
+    const targetY = y + dy;
+    if (targetY < 0 || targetY >= target.height) continue;
+    for (let x = donorBounds.left; x < donorBounds.right; x += 1) {
+      const targetX = x + dx;
+      if (targetX < 0 || targetX >= target.width) continue;
+      const sourceOffset = (y * donor.width + x) * 4;
+      if (donor.data[sourceOffset + 3] === 0) continue;
+      const targetOffset = (targetY * target.width + targetX) * 4;
+      out[targetOffset] = donor.data[sourceOffset];
+      out[targetOffset + 1] = donor.data[sourceOffset + 1];
+      out[targetOffset + 2] = donor.data[sourceOffset + 2];
+      out[targetOffset + 3] = donor.data[sourceOffset + 3];
+    }
+  }
+  return out;
+}
+
 function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[], options: { preserveTemplateSlotWhenSparse?: boolean } = {}): Map<string, Uint8ClampedArray> {
   const entries = flatten(psd.children);
   const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
   const expected = new Map<string, Uint8ClampedArray>();
+  const installRecords: CompactLayerInstallRecord[] = [];
   for (const entry of entries.filter((candidate) => candidate.path.includes('edithere:'))) {
     const layer = entry.layer;
     const slot = slotByPath.get(entry.path);
@@ -1087,25 +1148,59 @@ function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: Com
         ? slot.layerData
         : cropSheet(sheet, psd.width, psd.height, left, top, width, height)
       : new Uint8ClampedArray(width * height * 4);
-    if (slot && options.preserveTemplateSlotWhenSparse) {
-      const template = fallbackLayerImage(layer);
-      const renderedAlpha = rgbaAlphaPixels(data);
-      const templateAlpha = rgbaAlphaPixels(template.rgba);
-      const sparseThreshold = Math.max(1, Math.ceil(templateAlpha * 0.05));
-      if (templateAlpha > 0 && renderedAlpha < sparseThreshold) {
-        data = template.rgba;
-        slot.layerLeft = layer.left ?? left;
-        slot.layerTop = layer.top ?? top;
-        slot.layerWidth = template.width;
-        slot.layerHeight = template.height;
-        slot.layerData = data;
-        slot.fallbackTemplateSlot = {
-          alphaPixels: templateAlpha,
-          reason: `rendered compact slot alpha ${renderedAlpha} is below sparse threshold ${sparseThreshold}`,
+    const template = fallbackLayerImage(layer);
+    installRecords.push({ entryPath: entry.path, layer, slot, left, top, width, height, data, renderedAlpha: rgbaAlphaPixels(data), template, templateAlpha: rgbaAlphaPixels(template.rgba) });
+  }
+  if (options.preserveTemplateSlotWhenSparse) {
+    const convertedDonors = installRecords
+      .filter((record) => record.slot && record.renderedAlpha > 0)
+      .sort((a, b) => b.renderedAlpha - a.renderedAlpha);
+    for (const record of installRecords) {
+      if (!record.slot || record.renderedAlpha > 0) continue;
+      const donor = convertedDonors.find((candidate) => candidate.entryPath !== record.entryPath);
+      if (donor) {
+        const donorFill = copyDonorPixelsIntoTargetSlot(donor, record);
+        const donorAlpha = rgbaAlphaPixels(donorFill);
+        if (donorAlpha > 0) {
+          record.data = donorFill;
+          record.renderedAlpha = donorAlpha;
+          record.slot.layerLeft = record.left;
+          record.slot.layerTop = record.top;
+          record.slot.layerWidth = record.width;
+          record.slot.layerHeight = record.height;
+          record.slot.layerData = record.data;
+          record.slot.fallbackTemplateSlot = {
+            alphaPixels: donorAlpha,
+            source: 'converted-donor',
+            donorEditPath: donor.entryPath,
+            reason: `empty compact slot filled from converted donor ${donor.entryPath} (${donor.renderedAlpha} alpha pixels) instead of original template pixels`,
+          };
+          continue;
+        }
+      }
+      if (record.templateAlpha > 0) {
+        record.data = record.template.rgba;
+        record.renderedAlpha = record.templateAlpha;
+        record.left = record.layer.left ?? record.left;
+        record.top = record.layer.top ?? record.top;
+        record.width = record.template.width;
+        record.height = record.template.height;
+        record.slot.layerLeft = record.left;
+        record.slot.layerTop = record.top;
+        record.slot.layerWidth = record.width;
+        record.slot.layerHeight = record.height;
+        record.slot.layerData = record.data;
+        record.slot.fallbackTemplateSlot = {
+          alphaPixels: record.templateAlpha,
+          source: 'template',
+          reason: 'empty compact slot had no non-empty converted donor; preserved original template slot as last-resort upload guard',
         };
       }
     }
-    expected.set(entry.path, data);
+  }
+  for (const record of installRecords) {
+    const { entryPath, layer, left, top, width, height, data } = record;
+    expected.set(entryPath, data);
     layer.hidden = false;
     layer.left = left;
     layer.top = top;
@@ -2037,6 +2132,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
   if (!isFullGridTargetConfig(config)) {
     const slots = compactSlotsForPsd(psd, referenceFrameByKey);
     const useRawHairZmapSource = 'rawHairZmapSource' in config && config.rawHairZmapSource === true;
+    const expandCompactSlotsToSourceBounds = 'expandCompactSlotsToSourceBounds' in config && config.expandCompactSlotsToSourceBounds === true;
     let rawHairItemId: number | null = null;
     let rawHairPlacements: RawHairLayerPlacement[] = [];
     let sheet: Uint8ClampedArray = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
@@ -2050,7 +2146,6 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       sheet = rawResult.sheet;
       rawHairPlacements = rawResult.placements;
     } else {
-      const expandCompactSlotsToSourceBounds = 'expandCompactSlotsToSourceBounds' in config && config.expandCompactSlotsToSourceBounds === true;
       for (const slot of slots) {
         const key = `${slot.action}:${slot.frameIndex}`;
         const frame = frameByKey.get(key);
@@ -2145,11 +2240,13 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         anchor: 'compact-template-guide-character-anchor-matched-to-reference-meaegi-body-anchor',
         zmapPresetRemoved: config.removeZmapPreset,
         targetLayerPromotedToTop: false,
-        compactSlotLayersExpandedToSourceBounds: false,
+        compactSlotLayersExpandedToSourceBounds: expandCompactSlotsToSourceBounds,
         preserveTemplateSlotWhenSparse,
         sparseTemplateSlotFallbacks: slots.filter((slot) => slot.fallbackTemplateSlot).map((slot) => ({
           editPath: slot.editPath,
           alphaPixels: slot.fallbackTemplateSlot!.alphaPixels,
+          source: slot.fallbackTemplateSlot!.source,
+          donorEditPath: slot.fallbackTemplateSlot!.donorEditPath ?? null,
           reason: slot.fallbackTemplateSlot!.reason,
         })),
         rawHairZmapSource: useRawHairZmapSource,
