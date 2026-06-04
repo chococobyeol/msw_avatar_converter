@@ -75,6 +75,7 @@ const compactCapConfigs = Object.fromEntries(Object.entries(capTemplateFiles).ma
   templatePath: `avatartemplate/${file}`,
   outputName: file,
   removeZmapPreset: true,
+  preserveTemplateSlotWhenSparse: true,
 }]));
 
 const targetConfigs = {
@@ -924,6 +925,7 @@ interface CompactSlot {
   layerWidth?: number;
   layerHeight?: number;
   layerData?: Uint8ClampedArray;
+  fallbackTemplateSlot?: { alphaPixels: number; reason: string };
 }
 
 interface MapleStoryIoEffect {
@@ -1059,7 +1061,16 @@ function compactSlotsForPsd(psd: Psd, referenceFrameByKey: Map<string, LoadedFra
     });
 }
 
-function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[]): Map<string, Uint8ClampedArray> {
+
+function rgbaAlphaPixels(rgba: Uint8ClampedArray): number {
+  let alphaPixels = 0;
+  for (let offset = 3; offset < rgba.length; offset += 4) {
+    if (rgba[offset] > 0) alphaPixels += 1;
+  }
+  return alphaPixels;
+}
+
+function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[], options: { preserveTemplateSlotWhenSparse?: boolean } = {}): Map<string, Uint8ClampedArray> {
   const entries = flatten(psd.children);
   const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
   const expected = new Map<string, Uint8ClampedArray>();
@@ -1071,11 +1082,29 @@ function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: Com
     const top = hasExpandedSlotData ? slot!.layerTop! : layer.top ?? 0;
     const width = hasExpandedSlotData ? slot!.layerWidth! : Math.max(1, (layer.right ?? left + 1) - left);
     const height = hasExpandedSlotData ? slot!.layerHeight! : Math.max(1, (layer.bottom ?? top + 1) - top);
-    const data = slot
+    let data = slot
       ? slot.layerData && slot.layerData.length === width * height * 4
         ? slot.layerData
         : cropSheet(sheet, psd.width, psd.height, left, top, width, height)
       : new Uint8ClampedArray(width * height * 4);
+    if (slot && options.preserveTemplateSlotWhenSparse) {
+      const template = fallbackLayerImage(layer);
+      const renderedAlpha = rgbaAlphaPixels(data);
+      const templateAlpha = rgbaAlphaPixels(template.rgba);
+      const sparseThreshold = Math.max(1, Math.ceil(templateAlpha * 0.05));
+      if (templateAlpha > 0 && renderedAlpha < sparseThreshold) {
+        data = template.rgba;
+        slot.layerLeft = layer.left ?? left;
+        slot.layerTop = layer.top ?? top;
+        slot.layerWidth = template.width;
+        slot.layerHeight = template.height;
+        slot.layerData = data;
+        slot.fallbackTemplateSlot = {
+          alphaPixels: templateAlpha,
+          reason: `rendered compact slot alpha ${renderedAlpha} is below sparse threshold ${sparseThreshold}`,
+        };
+      }
+    }
     expected.set(entry.path, data);
     layer.hidden = false;
     layer.left = left;
@@ -2034,7 +2063,8 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         }
       }
     }
-    const expectedLayers = installCompactSlotLayers(psd, sheet, slots);
+    const preserveTemplateSlotWhenSparse = 'preserveTemplateSlotWhenSparse' in config && config.preserveTemplateSlotWhenSparse === true;
+    const expectedLayers = installCompactSlotLayers(psd, sheet, slots, { preserveTemplateSlotWhenSparse });
     if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
     const expectedRootComposite = updatePsdRootComposite(psd);
     mkdirSync(outDir, { recursive: true });
@@ -2116,6 +2146,12 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         zmapPresetRemoved: config.removeZmapPreset,
         targetLayerPromotedToTop: false,
         compactSlotLayersExpandedToSourceBounds: false,
+        preserveTemplateSlotWhenSparse,
+        sparseTemplateSlotFallbacks: slots.filter((slot) => slot.fallbackTemplateSlot).map((slot) => ({
+          editPath: slot.editPath,
+          alphaPixels: slot.fallbackTemplateSlot!.alphaPixels,
+          reason: slot.fallbackTemplateSlot!.reason,
+        })),
         rawHairZmapSource: useRawHairZmapSource,
         rawHairItemId,
         rawHairPlacements,
@@ -2130,6 +2166,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
           sourceAnchor: slot.sourceAnchor,
           destLeft: slot.destLeft,
           destTop: slot.destTop,
+          fallbackTemplateSlot: slot.fallbackTemplateSlot ?? null,
         })),
         placementValidation,
         redDotArtifacts,

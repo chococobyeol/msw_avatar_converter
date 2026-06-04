@@ -99,15 +99,42 @@ function partIconUrl(slot: string, itemCode: number): string | undefined {
   return mapleItemIconUrl(itemCode);
 }
 
-function characterLookFrameUrl(hash: string, actionCode: string, frameIndex: number): string {
-  const params = new URLSearchParams({
-    width: '180',
-    height: '180',
-    x: '90',
-    y: '140',
-    action: `${actionCode}.${frameIndex}`,
-  });
-  return `https://open.api.nexon.com/static/maplestory/character/look/${hash}?${params.toString()}`;
+type CharacterLookHashRef = { hash: string; params: URLSearchParams };
+
+function normalizeCharacterLookHashRef(rawHash: unknown): CharacterLookHashRef | null {
+  const value = String(rawHash ?? '').trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    const segments = url.pathname.split('/').filter(Boolean);
+    const lookIndex = segments.findIndex((segment, index) => segment.toLowerCase() === 'character' && segments[index + 1]?.toLowerCase() === 'look');
+    if (lookIndex >= 0 && segments[lookIndex + 2]) {
+      return { hash: segments[lookIndex + 2], params: new URLSearchParams(url.searchParams) };
+    }
+  } catch {
+    // Plain MeAegi/Nexon hash, not a URL.
+  }
+  const [hash, query = ''] = value.split('?', 2);
+  return { hash, params: new URLSearchParams(query) };
+}
+
+function characterLookFrameUrl(hashRef: string, actionCode: string, frameIndex: number): string {
+  const normalized = normalizeCharacterLookHashRef(hashRef);
+  if (!normalized) return '';
+  const params = new URLSearchParams(normalized.params);
+  params.set('width', '180');
+  params.set('height', '180');
+  params.set('x', '90');
+  params.set('y', '140');
+  params.set('action', `${actionCode}.${frameIndex}`);
+  return `https://open.api.nexon.com/static/maplestory/character/look/${normalized.hash}?${params.toString()}`;
+}
+
+function characterRenderImageUrl(hashRef: string): string | null {
+  const normalized = normalizeCharacterLookHashRef(hashRef);
+  if (!normalized) return null;
+  const query = normalized.params.toString();
+  return `https://open.api.nexon.com/static/maplestory/Character/${normalized.hash}.png${query ? `?${query}` : ''}`;
 }
 
 export interface MeaegiAvatarPayload {
@@ -155,7 +182,7 @@ export function buildMeaegiShareImport(share: string, avatar: MeaegiAvatarPayloa
     partId: part.id,
     imageRef: avatar.hash ? characterLookFrameUrl(avatar.hash, actionCode, frameIndex) : `${share}:${part.id}:${actionCode}:${frameIndex}`,
   })));
-  const renderImageUrl = avatar.hash ? `https://open.api.nexon.com/static/maplestory/Character/${avatar.hash}.png` : null;
+  const renderImageUrl = avatar.hash ? characterRenderImageUrl(String(avatar.hash)) : null;
   return {
     source: 'meaegi-share',
     share,

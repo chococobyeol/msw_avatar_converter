@@ -57,6 +57,17 @@ test('MeAegi share adapter extracts public share payloads into source parts and 
   assert.equal(imported.parts.find((part) => part.id === 'weapon')?.iconRef?.startsWith('https://avatar.maplestory.nexon.com/ItemIcon/'), true);
 });
 
+test('MeAegi share adapter normalizes full Nexon look URLs in hash payloads', () => {
+  const lookUrl = 'https://open.api.nexon.com/static/maplestory/character/look/LOOKHASH?wmotion=W00';
+  const imported = buildMeaegiShareImport('share-with-url-hash', {
+    itemCode: { hair: 44950 },
+    hash: lookUrl,
+  });
+  assert.equal(imported.frames[0]?.imageRef, 'https://open.api.nexon.com/static/maplestory/character/look/LOOKHASH?wmotion=W00&width=180&height=180&x=90&y=140&action=A00.0');
+  assert.equal(imported.frames[0]?.imageRef?.includes('/look/https://'), false);
+  assert.equal(imported.diagnostics.renderImageUrl, 'https://open.api.nexon.com/static/maplestory/Character/LOOKHASH.png?wmotion=W00');
+});
+
 test('whole-avatar bake URL carries current selected source parts', () => {
   const url = new URL(buildWholeAvatarBakeUrl('SHARE123', 'cape', ['hair', 'weapon']), 'http://localhost');
   assert.equal(url.pathname, '/api/bake-meaegi');
