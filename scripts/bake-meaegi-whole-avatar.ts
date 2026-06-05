@@ -926,7 +926,7 @@ interface CompactSlot {
   layerWidth?: number;
   layerHeight?: number;
   layerData?: Uint8ClampedArray;
-  fallbackTemplateSlot?: { alphaPixels: number; reason: string; source: 'converted-donor' | 'template'; donorEditPath?: string };
+  fallbackTemplateSlot?: { alphaPixels: number; reason: string; source: 'converted-donor' | 'template' | 'transparent-guard'; donorEditPath?: string };
 }
 
 interface MapleStoryIoEffect {
@@ -950,6 +950,7 @@ type HairEffectName = 'hairBelowBody' | 'hair' | 'hairOverHead' | 'hairShade' | 
 interface RawHairLayerPlacement {
   editPath: string;
   frameBook: string;
+  requestedFrameBook?: string;
   frameIndex: number;
   effectName: HairEffectName;
   anchor: { x: number; y: number; basis: string };
@@ -968,6 +969,31 @@ function compactPoseForLayerPath(layerPath: string): { action: string; frameInde
   if (lower.includes('back')) return { action: '밧줄', frameIndex: suffixIndex % 2 };
   if (lower.includes('prone') || lower.includes('stab')) return { action: '엎드리기', frameIndex: 0 };
   return { action: '기본(한손)', frameIndex: suffixIndex % 3 };
+}
+
+const frontOnlyCompactSourcePartIds = new Set(['face', 'faceDeco', 'eyeDeco']);
+
+export function isFrontOnlyCompactSourceSelection(selectedPartIds: string[]): boolean {
+  return selectedPartIds.length > 0 && selectedPartIds.every((partId) => frontOnlyCompactSourcePartIds.has(partId));
+}
+
+export function isCompactBackSlotPath(layerPath: string): boolean {
+  return layerPath.toLowerCase().includes('back');
+}
+
+export function shouldUseTransparentCompactBackSlotGuard(selectedPartIds: string[], layerPath: string): boolean {
+  return isFrontOnlyCompactSourceSelection(selectedPartIds) && isCompactBackSlotPath(layerPath);
+}
+
+export function compactTransparentUploadGuard(width: number, height: number): Uint8ClampedArray {
+  const data = new Uint8ClampedArray(width * height * 4);
+  if (data.length >= 4) {
+    data[0] = 0;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 1;
+  }
+  return data;
 }
 
 function layerParentPath(layerPath: string): string {
@@ -1130,7 +1156,7 @@ function copyDonorPixelsIntoTargetSlot(donor: CompactLayerInstallRecord, target:
   return out;
 }
 
-function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[], options: { preserveTemplateSlotWhenSparse?: boolean } = {}): Map<string, Uint8ClampedArray> {
+function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: CompactSlot[], options: { preserveTemplateSlotWhenSparse?: boolean; transparentGuardForSlot?: (entryPath: string) => boolean } = {}): Map<string, Uint8ClampedArray> {
   const entries = flatten(psd.children);
   const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
   const expected = new Map<string, Uint8ClampedArray>();
@@ -1157,6 +1183,21 @@ function installCompactSlotLayers(psd: Psd, sheet: Uint8ClampedArray, slots: Com
       .sort((a, b) => b.renderedAlpha - a.renderedAlpha);
     for (const record of installRecords) {
       if (!record.slot || record.renderedAlpha > 0) continue;
+      if (options.transparentGuardForSlot?.(record.entryPath)) {
+        record.data = compactTransparentUploadGuard(record.width, record.height);
+        record.renderedAlpha = rgbaAlphaPixels(record.data);
+        record.slot.layerLeft = record.left;
+        record.slot.layerTop = record.top;
+        record.slot.layerWidth = record.width;
+        record.slot.layerHeight = record.height;
+        record.slot.layerData = record.data;
+        record.slot.fallbackTemplateSlot = {
+          alphaPixels: record.renderedAlpha,
+          source: 'transparent-guard',
+          reason: 'front-only face source suppresses compact back slot donor/template fill; inserted a near-transparent upload guard instead of copying front face pixels',
+        };
+        continue;
+      }
       const donor = convertedDonors.find((candidate) => candidate.entryPath !== record.entryPath);
       if (donor) {
         const donorFill = copyDonorPixelsIntoTargetSlot(donor, record);
@@ -1311,6 +1352,28 @@ function rawHairAnchorForLayer(layerPath: string, origins: { front: { x: number;
   };
 }
 
+export function hasRawHairEffect(rawHair: MapleStoryIoHairItem, frameBook: string, frameIndex: number, effectName: HairEffectName): boolean {
+  return Boolean(rawHair.frameBooks?.[frameBook]?.frames?.[frameIndex]?.effects?.[effectName]);
+}
+
+const rawHairBackFrameBookFallbacks = ['rope', 'ladder', 'swingTF'] as const;
+
+export function resolveRawHairEffect(rawHair: MapleStoryIoHairItem, frameBook: string, frameIndex: number, effectName: HairEffectName): { effect?: MapleStoryIoEffect; frameBook: string; frameIndex: number } {
+  const direct = rawHair.frameBooks?.[frameBook]?.frames?.[frameIndex]?.effects?.[effectName];
+  if (direct) return { effect: direct, frameBook, frameIndex };
+  if (frameBook === 'backDefault' && (effectName === 'backHair' || effectName === 'backHairBelowCap')) {
+    for (const fallbackFrameBook of rawHairBackFrameBookFallbacks) {
+      const frames = rawHair.frameBooks?.[fallbackFrameBook]?.frames ?? [];
+      const preferredIndexes = [frameIndex, 0, ...frames.map((_, index) => index)];
+      for (const fallbackFrameIndex of [...new Set(preferredIndexes)]) {
+        const fallback = frames[fallbackFrameIndex]?.effects?.[effectName];
+        if (fallback?.image) return { effect: fallback, frameBook: fallbackFrameBook, frameIndex: fallbackFrameIndex };
+      }
+    }
+  }
+  return { frameBook, frameIndex };
+}
+
 function applyRawHairZmapLayers(psd: Psd, slots: CompactSlot[], rawHair: MapleStoryIoHairItem): { sheet: Uint8ClampedArray; placements: RawHairLayerPlacement[] } {
   const slotByPath = new Map(slots.map((slot) => [slot.editPath, slot]));
   const origins = rawHairOriginPoints(psd);
@@ -1320,13 +1383,13 @@ function applyRawHairZmapLayers(psd: Psd, slots: CompactSlot[], rawHair: MapleSt
     const slot = slotByPath.get(entry.path);
     if (!slot) continue;
     const effectName = hairEffectNameForLayerPath(entry.path);
-    const frameBook = hairFrameBookForLayerPath(entry.path);
-    const frameIndex = 0;
-    const effect = rawHair.frameBooks?.[frameBook]?.frames?.[frameIndex]?.effects?.[effectName];
-    if (!effect) throw new Error(`Raw Hair item ${rawHair.id ?? ''} is missing ${frameBook}[${frameIndex}].${effectName}`);
-    const decoded = decodeMapleStoryIoEffectImage(effect);
+    const requestedFrameBook = hairFrameBookForLayerPath(entry.path);
+    const requestedFrameIndex = 0;
+    const resolved = resolveRawHairEffect(rawHair, requestedFrameBook, requestedFrameIndex, effectName);
+    const { effect, frameBook, frameIndex } = resolved;
+    const decoded = effect ? decodeMapleStoryIoEffectImage(effect) : null;
     const image = decoded ?? fallbackLayerImage(entry.layer);
-    const origin = effect.origin && !effect.origin.isEmpty
+    const origin = effect?.origin && !effect.origin.isEmpty
       ? { x: Math.round(effect.origin.x ?? 0), y: Math.round(effect.origin.y ?? 0) }
       : { x: 0, y: 0 };
     const anchor = rawHairAnchorForLayer(entry.path, origins);
@@ -1338,7 +1401,9 @@ function applyRawHairZmapLayers(psd: Psd, slots: CompactSlot[], rawHair: MapleSt
     drawFrameAt(sheet, psd.width, psd.height, {
       action: frameBook,
       frameIndex,
-      imageRef: `maplestory.io:${rawHair.id ?? 'unknown'}:${frameBook}:${effectName}`,
+      imageRef: decoded
+        ? `maplestory.io:${rawHair.id ?? 'unknown'}:${frameBook}:${effectName}`
+        : `template-fallback:${rawHair.id ?? 'unknown'}:${frameBook}:${effectName}`,
       width: image.width,
       height: image.height,
       rgba: image.rgba,
@@ -1347,6 +1412,7 @@ function applyRawHairZmapLayers(psd: Psd, slots: CompactSlot[], rawHair: MapleSt
     placements.push({
       editPath: entry.path,
       frameBook,
+      requestedFrameBook,
       frameIndex,
       effectName,
       anchor,
@@ -2133,6 +2199,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     const slots = compactSlotsForPsd(psd, referenceFrameByKey);
     const useRawHairZmapSource = 'rawHairZmapSource' in config && config.rawHairZmapSource === true;
     const expandCompactSlotsToSourceBounds = 'expandCompactSlotsToSourceBounds' in config && config.expandCompactSlotsToSourceBounds === true;
+    const frontOnlyCompactBackSlotGuard = isFrontOnlyCompactSourceSelection(imported.selection.selectedPartIds);
     let rawHairItemId: number | null = null;
     let rawHairPlacements: RawHairLayerPlacement[] = [];
     let sheet: Uint8ClampedArray = new Uint8ClampedArray(sheetWidth * sheetHeight * 4);
@@ -2147,6 +2214,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       rawHairPlacements = rawResult.placements;
     } else {
       for (const slot of slots) {
+        if (frontOnlyCompactBackSlotGuard && isCompactBackSlotPath(slot.editPath)) continue;
         const key = `${slot.action}:${slot.frameIndex}`;
         const frame = frameByKey.get(key);
         if (!frame) throw new Error(`Missing compact source frame ${key} for ${slot.editPath}`);
@@ -2159,7 +2227,10 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       }
     }
     const preserveTemplateSlotWhenSparse = 'preserveTemplateSlotWhenSparse' in config && config.preserveTemplateSlotWhenSparse === true;
-    const expectedLayers = installCompactSlotLayers(psd, sheet, slots, { preserveTemplateSlotWhenSparse });
+    const expectedLayers = installCompactSlotLayers(psd, sheet, slots, {
+      preserveTemplateSlotWhenSparse,
+      transparentGuardForSlot: (entryPath) => frontOnlyCompactBackSlotGuard && isCompactBackSlotPath(entryPath),
+    });
     if (config.removeZmapPreset) psd.children = removeZmapPresetLayers(psd.children);
     const expectedRootComposite = updatePsdRootComposite(psd);
     mkdirSync(outDir, { recursive: true });
@@ -2207,6 +2278,7 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
     };
     const redDotArtifacts = writeCompactRedDotSheets(sheet, originalTemplateGuideSheet, convertedEditableSheet, sheetWidth, sheetHeight, slots, outDir);
     const supportedKeys = new Set(slots.map((slot) => `${slot.action}:${slot.frameIndex}`));
+    const missingRawHairPlacements = rawHairPlacements.filter((placement) => placement.missingImage);
     const skipped = [...uniqueFrames.values()]
       .filter((frame) => {
         const key = `${frame.action}:${frame.frameIndex}`;
@@ -2242,6 +2314,10 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
         targetLayerPromotedToTop: false,
         compactSlotLayersExpandedToSourceBounds: expandCompactSlotsToSourceBounds,
         preserveTemplateSlotWhenSparse,
+        frontOnlyCompactBackSlotGuard,
+        frontOnlyBackSlotGuardedLayers: slots
+          .filter((slot) => slot.fallbackTemplateSlot?.source === 'transparent-guard')
+          .map((slot) => slot.editPath),
         sparseTemplateSlotFallbacks: slots.filter((slot) => slot.fallbackTemplateSlot).map((slot) => ({
           editPath: slot.editPath,
           alphaPixels: slot.fallbackTemplateSlot!.alphaPixels,
@@ -2296,9 +2372,14 @@ export async function bakeMeaegiWholeAvatar(input: BakeMeaegiWholeAvatarInput) {
       warnings: [
         useRawHairZmapSource
           ? 'Hair compact bake preserves Avatar_Hair.psd data:use_zmap_preset/data:vslot/data:origin and writes MapleStory raw Hair effects into the matching hairBelowBody/hair/hairOverHead/backHair zmap layers. If MapleStory raw data omits an MSW-required slot such as hairShade, the original non-empty template slot is preserved so MSW does not reject Hair/Cap as blank.'
+          : frontOnlyCompactBackSlotGuard
+          ? 'Front-only face/accessory compact bake suppresses back-slot source pixels and donor/template fallback so face pixels do not appear on the back of the head; back slots receive only a near-transparent upload guard.'
           : imported.selection.baselineMaskApplied
           ? 'Selective compact bake is active: selected-part render frames are alpha-masked against the MeAegi default baseline so excluded pixels become transparent.'
           : 'This compact template bake writes selected source pixels into every edithere slot of a 300x180 cap/hair style PSD.',
+        ...(missingRawHairPlacements.length > 0
+          ? [`Raw Hair item ${rawHairItemId ?? ''} is missing ${missingRawHairPlacements.length} template effect(s); preserved original Avatar_Hair.psd slots for: ${missingRawHairPlacements.map((placement) => `${placement.frameBook}[${placement.frameIndex}].${placement.effectName}`).join(', ')}.`]
+          : []),
         'Compact cap/hair templates do not contain the 90-frame full motion grid; they contain named edit slots, so validation is per editable layer readback plus guide-anchor red dots.',
         'MSW upload/runtime validation is still manual.',
         'Blink/expression frames are intentionally excluded.',

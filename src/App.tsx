@@ -1,19 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { CheckCircle2, Download, Eye, FileText, Layers, Wand2, XCircle } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { CheckCircle2, Eye, FileText, HelpCircle, Layers, Wand2, XCircle } from 'lucide-react';
 import { computeUiValidation, defaultTargetForSourcePart, sampleFrames, sampleParts, targetParts, type UiFrame, type UiMappingInput, type UiPart } from './sample.js';
 
 type MappingMode = 'part' | 'group' | 'whole-avatar';
 type WholeAvatarBakeTarget = typeof targetParts[number];
-
-export function buildWholeAvatarBakeUrl(share: string, target: WholeAvatarBakeTarget, selectedPartIds: string[]): string {
-  const params = new URLSearchParams({
-    share,
-    target,
-    format: 'json',
-    parts: selectedPartIds.join(','),
-  });
-  return `/api/bake-meaegi?${params.toString()}`;
-}
 
 export function buildMappedPartBakePayload(share: string, mappings: UiMappingInput[]) {
   return {
@@ -46,6 +36,12 @@ const initialMappings: UiMapping[] = sampleParts.map((part) => ({
   confirmed: false,
 }));
 
+const previewZoomMin = 0.5;
+const previewZoomMax = 5;
+const previewZoomDefault = 1.6;
+const previewZoomStep = 0.05;
+const previewZoomButtonStep = 0.25;
+
 interface ImportDiagnostics {
   source?: string;
   share?: string;
@@ -62,64 +58,66 @@ interface ImportedSourceState {
   diagnostics?: ImportDiagnostics;
 }
 
-interface BakeResultFile {
+interface PsdBakeComparisonFile {
   action: string;
   frameCount: number;
-  gif: string | null;
-  frameDir: string;
+  gif?: string | null;
+  frameDir?: string;
   sourceVsConvertedDiffPixels: number;
   sourceVsTemplateDiffPixels: number;
 }
 
-interface BakeResult {
-  report: {
-    target: WholeAvatarBakeTarget;
-    outputPsd: string;
-    bakedFrames: number;
-    skippedFrames: number;
-    selectedPartIds?: string[];
-    selection?: Record<string, unknown>;
-    placement: {
-      placementValidation?: {
+interface PsdBakeReport {
+  target: WholeAvatarBakeTarget | string;
+  outputPsd: string;
+  bakedFrames: number;
+  skippedFrames: number;
+  selectedPartIds?: string[];
+  selection?: Record<string, unknown>;
+  placement: {
+    placementValidation?: {
+      pass: boolean;
+      maxAbsDx: number;
+      maxAbsDy: number;
+      failedFrames?: number;
+      frames?: Array<{
+        key: string;
         pass: boolean;
-        maxAbsDx: number;
-        maxAbsDy: number;
-        failedFrames?: number;
-        frames?: Array<{
-          key: string;
-          pass: boolean;
-          error?: { dx: number; dy: number };
-          cellFullyInsideSheet?: boolean;
-          anchorInsideSheet?: boolean;
-        }>;
-      };
-      redDotArtifacts?: Record<string, string>;
-      [key: string]: unknown;
+        error?: { dx: number; dy: number };
+        cellFullyInsideSheet?: boolean;
+        anchorInsideSheet?: boolean;
+      }>;
     };
-    validation: {
-      frameCellDiffPixels: number;
-      frameCellMaxChannelDelta: number;
-      motionComparisonGifsGenerated: number;
-    };
+    sparseTemplateSlotFallbacks?: Array<{ editPath: string; alphaPixels: number; source?: string; donorEditPath?: string | null; reason: string }>;
+    rawHairZmapSource?: boolean;
+    rawHairItemId?: number | null;
+    rawHairPlacements?: Array<{ editPath: string; frameBook: string; frameIndex: number; effectName: string; missingImage?: boolean }>;
+    [key: string]: unknown;
   };
-  files: {
-    psd: string;
-    psdDownloadName?: string;
-    report: string;
-    expectedSheet: string;
-    templateGuideSheet?: string;
-    templateReferenceSheet: string;
-    convertedEditableSheet: string;
-    diff: string;
-    redDots?: {
-      sourceBakedSheet: string;
-      templateGuideSheet: string;
-      convertedSheet: string;
-      overlaySheet: string;
-      coordinates: string;
-    };
-    motionComparisonGifs: BakeResultFile[];
+  validation: {
+    diffPixels?: number;
+    maxChannelDelta?: number;
+    frameCellDiffPixels: number;
+    frameCellMaxChannelDelta: number;
+    motionComparisonGifsGenerated?: number;
+    editableLayersNonEmpty?: boolean;
+    emptyEditableLayers?: string[];
+    editableLayerAlphaPixels?: Array<{ path: string; alphaPixels: number }>;
+    motionComparisons?: PsdBakeComparisonFile[];
   };
+  warnings?: string[];
+}
+
+interface PsdBakeFiles {
+  psd: string;
+  psdDownloadName?: string;
+  report: string;
+  expectedSheet: string;
+  templateGuideSheet?: string;
+  templateReferenceSheet?: string;
+  convertedEditableSheet: string;
+  diff: string;
+  motionComparisonGifs?: PsdBakeComparisonFile[];
 }
 
 interface MappedBakeResult {
@@ -139,38 +137,64 @@ interface MappedBakeResult {
       partIds: string[];
     };
     error?: string;
-    report?: BakeResult['report'];
-    files?: BakeResult['files'];
-  }>;
-}
-
-interface RedDotMeasurementResult {
-  pass: boolean;
-  comparedFrames: number;
-  missingFrames: number;
-  failedFrames: number;
-  maxAbsDx: number;
-  maxAbsDy: number;
-  files?: {
-    uploadedActual: string;
-    report: string;
-    calibration?: string | null;
-  };
-  calibration?: {
-    saved: boolean;
-    corrections: number;
-  };
-  frames: Array<{
-    key: string;
-    pass: boolean;
-    deltaActualMinusExpected: { dx: number; dy: number } | null;
-    suggestedCorrectionToApplyToActual: { dx: number; dy: number } | null;
+    report?: PsdBakeReport;
+    files?: PsdBakeFiles;
   }>;
 }
 
 function frameImageRef(frames: UiFrame[], parts: UiPart[], action: string, frameIndex: number): string | undefined {
   const partIds = new Set(parts.map((part) => part.id));
   return frames.find((frame) => frame.action === action && frame.frameIndex === frameIndex && (partIds.size === 0 || partIds.has(frame.partId)))?.imageRef;
+}
+
+function formatMappedPayloadSummary(requestedRows: ReturnType<typeof buildMappedPartBakePayload>['mappings']) {
+  return `mappedPayload rows=${requestedRows.length} ${requestedRows.map((row) => `${row.partId}->${row.targetPartId}/${row.mode}${row.groupId ? `#${row.groupId}` : ''}`).join(' | ') || '(none)'}`;
+}
+
+function formatMappedBakeLog(result: MappedBakeResult, requestedRows: ReturnType<typeof buildMappedPartBakePayload>['mappings'], httpStatus: number): string[] {
+  const lines = [
+    `POST /api/bake-meaegi-mapped -> HTTP ${httpStatus}`,
+    formatMappedPayloadSummary(requestedRows),
+    `mappedExport ok=${result.ok} exported=${result.exportedGroups} failed=${result.failedGroups} runDir=${result.runDir} manifest=${result.files?.manifest ?? '-'}`,
+  ];
+
+  result.results.forEach((entry, index) => {
+    const group = entry.group;
+    lines.push(`mappedGroup[${index}] ${entry.ok ? 'ok' : 'fail'} key=${group.key} target=${group.target} mode=${group.mode} group=${group.groupId || '-'} parts=${group.partIds.join(',')}`);
+    if (!entry.ok) {
+      lines.push(`  error=${entry.error ?? '(unknown)'}`);
+      return;
+    }
+
+    const report = entry.report;
+    const files = entry.files;
+    const validation = report?.validation;
+    const placement = report?.placement;
+    const redDot = placement?.placementValidation;
+    const emptyLayers = validation?.emptyEditableLayers ?? [];
+    const alphaSummary = (validation?.editableLayerAlphaPixels ?? [])
+      .map((layer) => `${layer.path}:${layer.alphaPixels}`)
+      .join(' | ');
+    const fallbackSummary = (placement?.sparseTemplateSlotFallbacks ?? [])
+      .map((fallback) => `${fallback.editPath}:${fallback.source ?? 'unknown'}:${fallback.alphaPixels}`)
+      .join(' | ');
+    const rawHairMissingSummary = (placement?.rawHairPlacements ?? [])
+      .filter((rawHairPlacement) => rawHairPlacement.missingImage)
+      .map((rawHairPlacement) => `${rawHairPlacement.editPath}:${rawHairPlacement.frameBook}[${rawHairPlacement.frameIndex}].${rawHairPlacement.effectName}`)
+      .join(' | ');
+
+    lines.push(`  psd=${report?.outputPsd ?? '-'} download=${files?.psdDownloadName ?? '-'}`);
+    lines.push(`  artifacts report=${files?.report ?? '-'} source=${files?.expectedSheet ?? '-'} converted=${files?.convertedEditableSheet ?? '-'} diff=${files?.diff ?? '-'}`);
+    lines.push(`  frames baked=${report?.bakedFrames ?? '-'} skipped=${report?.skippedFrames ?? '-'} selected=${(report?.selectedPartIds ?? group.partIds).join(',') || '-'}`);
+    lines.push(`  validation diffPixels=${validation?.diffPixels ?? '-'} maxDelta=${validation?.maxChannelDelta ?? '-'} frameCellDiffPixels=${validation?.frameCellDiffPixels ?? '-'} frameCellMaxDelta=${validation?.frameCellMaxChannelDelta ?? '-'} editableNonEmpty=${validation?.editableLayersNonEmpty ?? '-'} empty=${emptyLayers.join(',') || '(none)'}`);
+    if (alphaSummary) lines.push(`  editableAlpha=${alphaSummary}`);
+    if (fallbackSummary) lines.push(`  compactSlotFallbacks=${fallbackSummary}`);
+    if (rawHairMissingSummary) lines.push(`  rawHairMissingEffects=${rawHairMissingSummary}`);
+    if (redDot) lines.push(`  placement pass=${redDot.pass} maxDx=${redDot.maxAbsDx} maxDy=${redDot.maxAbsDy} failed=${(redDot.frames ?? []).filter((frame) => !frame.pass).length}`);
+    if (report?.warnings?.length) lines.push(`  warnings=${report.warnings.join(' | ')}`);
+  });
+
+  return lines;
 }
 
 function FramePreview({ parts, frames, title }: { parts: UiPart[]; frames: UiFrame[]; title: string }) {
@@ -223,17 +247,11 @@ export function App() {
   const [diagnostics, setDiagnostics] = useState<ImportDiagnostics>({});
   const [importedSource, setImportedSource] = useState<ImportedSourceState | null>(null);
   const [selectedPartIds, setSelectedPartIds] = useState<Set<string>>(new Set(sampleParts.map((part) => part.id)));
-  const [previewZoom, setPreviewZoom] = useState(1.15);
-  const [exportStatus, setExportStatus] = useState('not exported');
-  const [bakeStatus, setBakeStatus] = useState('whole-avatar PSD not baked');
-  const [bakeResult, setBakeResult] = useState<BakeResult | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(previewZoomDefault);
   const [mappedBakeStatus, setMappedBakeStatus] = useState('mapped part PSD not baked');
   const [mappedBakeResult, setMappedBakeResult] = useState<MappedBakeResult | null>(null);
-  const [selectedBakeTarget, setSelectedBakeTarget] = useState<WholeAvatarBakeTarget>('cape');
-  const [currentBakeTarget, setCurrentBakeTarget] = useState<WholeAvatarBakeTarget | null>(null);
-  const [adjustedRedDotFile, setAdjustedRedDotFile] = useState<File | null>(null);
-  const [redDotMeasureStatus, setRedDotMeasureStatus] = useState('red-dot 비교 파일 없음');
-  const [redDotMeasureResult, setRedDotMeasureResult] = useState<RedDotMeasurementResult | null>(null);
+  const [showBakeCliHelp, setShowBakeCliHelp] = useState(false);
+  const importInputRef = useRef<HTMLTextAreaElement | null>(null);
   const grouped = useMemo(() => mappings.filter((mapping) => mapping.mode !== 'part' || mapping.groupId), [mappings]);
   const validation = useMemo(() => computeUiValidation(parts, frames, mappings), [parts, frames, mappings]);
   const sourceImageUrl = diagnostics.renderImageUrl ?? frames.find((frame) => frame.imageRef)?.imageRef;
@@ -248,8 +266,22 @@ export function App() {
     }));
   };
 
-  const confirmAll = () => setMappings((current) => current.map((mapping) => ({ ...mapping, groupId: mapping.mode === 'whole-avatar' ? 'whole-avatar' : mapping.mode === 'group' && !mapping.groupId ? 'bundle' : mapping.groupId, confirmed: Boolean(mapping.targetPartId) })));
-  const bakeWholeAvatarToCape = () => setMappings((current) => current.map((mapping) => ({ ...mapping, targetPartId: 'cape', mode: 'whole-avatar', groupId: 'whole-avatar', confirmed: false })));
+  const confirmAll = () => setMappings((current) => current.map((mapping) => ({
+    ...mapping,
+    groupId: mapping.mode === 'whole-avatar' ? 'whole-avatar' : mapping.mode === 'group' && !mapping.groupId ? 'bundle' : mapping.groupId,
+    confirmed: Boolean(mapping.targetPartId),
+  })));
+  const bakeWholeAvatarToCape = () => {
+    setMappings((current) => current.map((mapping) => ({
+      ...mapping,
+      targetPartId: 'cape',
+      mode: 'whole-avatar',
+      groupId: 'whole-avatar',
+      confirmed: true,
+    })));
+    setMappedBakeResult(null);
+    setMappedBakeStatus('전체 아바타를 cape 한 파트로 굽도록 매핑했습니다. 이제 PSD 시트 생성을 누르세요.');
+  };
   const applySelectedParts = (source = importedSource, selected = selectedPartIds) => {
     if (!source) return;
     const nextParts = source.parts.filter((part) => selected.has(part.id));
@@ -259,7 +291,6 @@ export function App() {
     setFrames(nextFrames);
     setMappings(nextParts.map((part) => ({ partId: part.id, targetPartId: defaultTargetForSourcePart(part), mode: 'part', groupId: '', confirmed: false })));
     setImportStatus(`applied ${nextParts.length}/${source.parts.length} selected parts / ${nextFrames.length} frames from ${source.source ?? 'json'}`);
-    setExportStatus('not exported');
     setImportLog((current) => [
       `applied selected parts: ${nextParts.map((part) => `${part.id}${part.itemCode ? `:${part.itemCode}` : ''}`).join(', ') || '(none)'}`,
       `appliedFrames=${nextFrames.length} actionFrames=${new Set(nextFrames.map((frame) => `${frame.action}:${frame.frameIndex}`)).size}`,
@@ -274,13 +305,14 @@ export function App() {
   };
 
   const importSource = async () => {
-    if (!importJson.trim()) {
+    const rawInput = importJson.trim() || importInputRef.current?.value.trim() || '';
+    if (!rawInput) {
       setImportStatus(`imported ${parts.length} parts / ${frames.length} frames`);
       setImportLog((current) => [`blank import: kept current source (${parts.length} parts / ${frames.length} frames)`, ...current]);
       return;
     }
     try {
-      const raw = importJson.trim();
+      const raw = rawInput;
       const nextLog = [`input received: ${raw.slice(0, 120)}${raw.length > 120 ? '…' : ''}`];
       const imported = raw.startsWith('http') || /^[A-Za-z0-9_-]{6,}$/.test(raw)
         ? await fetch(`/api/meaegi-share?share=${encodeURIComponent(raw)}`).then(async (response) => {
@@ -314,7 +346,9 @@ export function App() {
         ...nextLog,
         `source=${imported.source ?? 'json'} share=${imported.share ?? '-'}`,
         `parts=${nextParts.length} partFrames=${nextFrames.length} actionFrames=${new Set(nextFrames.map((frame) => `${frame.action}:${frame.frameIndex}`)).size}`,
+        `partsDetail=${nextParts.map((part) => `${part.id}${part.itemCode ? `:${part.itemCode}` : ''}${part.label ? `(${part.label})` : ''}`).join(' | ')}`,
         `imageRefs=${uniqueImages.length}${uniqueImages[0] ? ` first=${uniqueImages[0]}` : ''}`,
+        `renderImageUrl=${nextDiagnostics.renderImageUrl ?? '-'}`,
         `iconRefs=${nextParts.filter((part) => part.iconRef).length}`,
         ...(Array.isArray(nextDiagnostics.hiddenEmotions)
           ? nextDiagnostics.hiddenEmotions.map((emotion: unknown) => {
@@ -324,84 +358,9 @@ export function App() {
           : []),
         ...((nextDiagnostics.warnings as string[] | undefined) ?? []).map((warning) => `warning: ${warning}`),
       ]);
-      setExportStatus('not exported');
     } catch (error) {
       setImportStatus(`import failed: ${(error as Error).message}`);
       setImportLog((current) => [`import failed: ${(error as Error).message}`, ...current]);
-    }
-  };
-
-  const exportReviewManifest = () => {
-    const bundle = {
-      kind: 'msw-avatar-review-bundle-manifest',
-      validation,
-      mappings,
-      frames,
-      manualReviewRequired: true,
-    };
-    if (typeof document !== 'undefined') {
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = 'msw-avatar-review-bundle.json';
-      anchor.click();
-      URL.revokeObjectURL(url);
-    }
-    setExportStatus('review bundle manifest generated');
-  };
-
-  const convertWholeAvatarPsd = async (target: WholeAvatarBakeTarget) => {
-    const share = importedSource?.share ?? importJson.trim();
-    if (!share) {
-      setBakeStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
-      return;
-    }
-    const selectedIds = importedSource
-      ? importedSource.parts.filter((part) => selectedPartIds.has(part.id)).map((part) => part.id)
-      : parts.map((part) => part.id);
-    if (importedSource && selectedIds.length === 0) {
-      setBakeStatus('선택 변환할 파트를 하나 이상 체크해야 합니다.');
-      return;
-    }
-    setCurrentBakeTarget(target);
-    setBakeStatus(`converting ${target} PSD with ${selectedIds.length} selected part(s) and generating motion GIF comparisons...`);
-    setBakeResult(null);
-    try {
-      const response = await fetch(buildWholeAvatarBakeUrl(share, target, selectedIds));
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error ?? `HTTP ${response.status}`);
-      }
-      const body = await response.json() as BakeResult;
-      setBakeResult(body);
-      const bakedFrames = body.report.bakedFrames;
-      const skippedFrames = body.report.skippedFrames;
-      const frameCellDiffPixels = body.report.validation.frameCellDiffPixels;
-      const frameCellMaxDelta = body.report.validation.frameCellMaxChannelDelta;
-      const gifCount = body.report.validation.motionComparisonGifsGenerated;
-      const placement = body.report.placement.placementValidation;
-      const appliedCorrections = body.report.placement.manualFrameCorrections;
-      const correctionCount = Array.isArray(appliedCorrections) ? appliedCorrections.length : 0;
-      setBakeStatus(`converted ${target}: corrections=${correctionCount}, baked=${bakedFrames}, skipped=${skippedFrames}, redDotPass=${placement?.pass ?? false}, redDotMax=${placement?.maxAbsDx ?? '-'},${placement?.maxAbsDy ?? '-'}, source-vs-PSD frameDiff=${frameCellDiffPixels}, maxDelta=${frameCellMaxDelta}, comparisonGIFs=${gifCount}`);
-      setImportLog((current) => [
-        `GET /api/bake-meaegi target=${target} selectedParts=${selectedIds.join(',') || '(none)'} -> HTTP ${response.status}`,
-        `convertedOutput=${body.report.outputPsd}`,
-        `selection=${JSON.stringify(body.report.selection ?? { selectedPartIds: selectedIds })}`,
-        `downloadName=${body.files.psdDownloadName ?? '-'}`,
-        `appliedManualCorrections=${correctionCount}`,
-        `redDotArtifacts=${JSON.stringify(body.files.redDots ?? {})}`,
-        `redDotPlacementValidation=${JSON.stringify(body.report.placement.placementValidation ?? {})}`,
-        `motionComparisonGifs=${gifCount} first=${body.files.motionComparisonGifs.find((artifact) => artifact.gif)?.gif ?? '-'}`,
-        `wholeAvatarBake bakedFrames=${bakedFrames} skippedFrames=${skippedFrames}`,
-        `wholeAvatarFrameValidation frameCellDiffPixels=${frameCellDiffPixels} frameCellMaxDelta=${frameCellMaxDelta}`,
-        'warning: 위치 검증은 MeAegi input / Original template / Converted PSD 3열 GIF를 보고 확인해야 합니다.',
-        ...current,
-      ]);
-    } catch (error) {
-      const message = `whole-avatar bake failed: ${(error as Error).message}`;
-      setBakeStatus(message);
-      setImportLog((current) => [message, ...current]);
     }
   };
 
@@ -429,63 +388,11 @@ export function App() {
       const result = body as MappedBakeResult;
       setMappedBakeResult(result);
       setMappedBakeStatus(`mapped export done: exported=${result.exportedGroups}, failed=${result.failedGroups}`);
-      setImportLog((current) => [
-        `POST /api/bake-meaegi-mapped -> HTTP ${response.status}`,
-        `mappedExport exported=${result.exportedGroups} failed=${result.failedGroups} manifest=${result.files?.manifest ?? '-'}`,
-        ...result.results.map((entry) => `mappedGroup ${entry.ok ? 'ok' : 'fail'} target=${entry.group.target} mode=${entry.group.mode} group=${entry.group.groupId} parts=${entry.group.partIds.join(',')} ${entry.error ? `error=${entry.error}` : `psd=${entry.report?.outputPsd ?? '-'}`}`),
-        ...current,
-      ]);
+      setImportLog((current) => [...formatMappedBakeLog(result, payload.mappings, response.status), ...current]);
     } catch (error) {
       const message = `mapped part bake failed: ${(error as Error).message}`;
       setMappedBakeStatus(message);
-      setImportLog((current) => [message, ...current]);
-    }
-  };
-
-  const compareAdjustedRedDots = async () => {
-    if (!bakeResult?.files.redDots?.templateGuideSheet) {
-      setRedDotMeasureStatus('먼저 red-dot bake 결과를 생성해야 합니다.');
-      return;
-    }
-    if (!adjustedRedDotFile) {
-      setRedDotMeasureStatus('비교할 수동 보정 PNG/PSD 파일을 선택해야 합니다.');
-      return;
-    }
-    const target = currentBakeTarget ?? bakeResult.report.target;
-    const share = importedSource?.share ?? importJson.trim();
-    if (!share) {
-      setRedDotMeasureStatus('먼저 MeAegi 공유링크를 불러와야 합니다.');
-      return;
-    }
-    setRedDotMeasureStatus(`comparing ${adjustedRedDotFile.name}, saving calibration, then rebaking ${target}...`);
-    setRedDotMeasureResult(null);
-    try {
-      const response = await fetch(`/api/red-dot-measure?expected=${encodeURIComponent(bakeResult.files.redDots.templateGuideSheet)}&share=${encodeURIComponent(share)}&target=${target}`, {
-        method: 'POST',
-        headers: {
-          'x-file-name': adjustedRedDotFile.name,
-          'content-type': 'application/octet-stream',
-        },
-        body: adjustedRedDotFile,
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-      setRedDotMeasureResult(body as RedDotMeasurementResult);
-      setRedDotMeasureStatus(`calibration saved=${body.calibration?.saved ?? false}, corrections=${body.calibration?.corrections ?? 0}; rebaking ${target}...`);
-      setImportLog((current) => [
-        `POST /api/red-dot-measure -> HTTP ${response.status}`,
-        `manualRedDotCompare pass=${body.pass} failed=${body.failedFrames} maxDx=${body.maxAbsDx} maxDy=${body.maxAbsDy}`,
-        `manualCalibration saved=${body.calibration?.saved ?? false} corrections=${body.calibration?.corrections ?? 0} file=${body.files?.calibration ?? '-'}`,
-        `manualRedDotReport=${body.files?.report ?? '-'}`,
-        ...current,
-      ]);
-      if (!body.calibration?.saved) throw new Error('calibration was not saved; uploaded file is missing required 1px green dots.');
-      await convertWholeAvatarPsd(target);
-      setRedDotMeasureStatus(`calibration applied and ${target} rebaked. 새 PSD 다운로드 링크를 다시 눌러야 합니다.`);
-    } catch (error) {
-      const message = `red-dot compare failed: ${(error as Error).message}`;
-      setRedDotMeasureStatus(message);
-      setImportLog((current) => [message, ...current]);
+      setImportLog((current) => [message, formatMappedPayloadSummary(payload.mappings), ...current]);
     }
   };
 
@@ -495,11 +402,8 @@ export function App() {
         <div>
           <p className="eyebrow">MapleStory Worlds Avatar PSD Converter</p>
           <h1>MeAegi/이미지 코디를 MSW 템플릿 PSD로 변환</h1>
-          <p>모든 소스 파트를 사용자가 MSW 대상 파트로 확인해야 export가 열립니다. 전체 감지 애니메이션 범위를 기준으로 preview/diff를 표시합니다.</p>
+          <p>파트별 매핑을 확인한 뒤 실제 PSD export 결과와 validation artifact를 로그 중심으로 확인합니다.</p>
         </div>
-        <button className="primary" disabled={!validation.pass} aria-label="export-review-bundle" onClick={exportReviewManifest}>
-          <Download size={18} /> Preview Review Bundle
-        </button>
       </header>
 
       <section className="grid two">
@@ -507,11 +411,17 @@ export function App() {
           <h2><Wand2 size={18} /> Import</h2>
           <div className="dropzone">
             <strong>Public MeAegi URL / 이미지 프레임 업로드</strong>
-            <textarea aria-label="source-json-import" value={importJson} onChange={(event) => setImportJson(event.target.value)} placeholder='{"parts":[{"id":"hair"}],"frames":[...]}' />
+            <textarea
+              ref={importInputRef}
+              aria-label="source-json-import"
+              value={importJson}
+              onInput={(event) => setImportJson(event.currentTarget.value)}
+              onChange={(event) => setImportJson(event.target.value)}
+              placeholder='{"parts":[{"id":"hair"}],"frames":[...]}'
+            />
             <button onClick={importSource}>소스 JSON 불러오기</button>
             <p>{importStatus}</p>
             <p>Loaded source: {parts.length} parts, {validation.totalPartFrames} part-frames, {validation.totalFrames} action frames.</p>
-            <p aria-label="export-status">{exportStatus}</p>
             {sourceImageUrl ? (
               <div className="source-image-card">
                 <span>Current render image</span>
@@ -537,109 +447,28 @@ export function App() {
       </section>
 
       <section className="panel">
-        <h2><FileText size={18} /> Import / Conversion Log</h2>
-        <pre className="log" aria-label="import-log">{importLog.join('\n')}</pre>
-      </section>
-
-      <section className="panel">
-        <h2><Download size={18} /> Whole-avatar PSD Bake</h2>
-        <p className="muted">변환 버튼은 바로 다운로드하지 않습니다. 먼저 PSD를 만들고, MeAegi input / Original template / Converted PSD 3열 모션 GIF를 생성해서 위치를 눈으로 검증하게 합니다.</p>
-        <div className="toolbar">
-          <select value={selectedBakeTarget} onChange={(event) => setSelectedBakeTarget(event.target.value as WholeAvatarBakeTarget)} aria-label="whole-bake-target">
-            {targetParts.map((target) => <option key={target} value={target}>{target}</option>)}
-          </select>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd(selectedBakeTarget)}>선택 target 변환 + 검증</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape')}>Cape 변환 + GIF 비교 생성</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('cape-balloon')}>Cape Balloon 변환 + GIF 비교 생성</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('longcoat')}>Longcoat 변환 + GIF 비교 생성</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('gloves')}>Gloves 변환 + GIF 비교 생성</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('pants')}>Pants 변환 + GIF 비교 생성</button>
-          <button disabled={!importedSource?.share} onClick={() => convertWholeAvatarPsd('shoes')}>Shoes 변환 + GIF 비교 생성</button>
-          <span aria-label="bake-status">{bakeStatus}</span>
+        <div className="section-title">
+          <h2><FileText size={18} /> Import / Conversion Log</h2>
+          <button
+            type="button"
+            className="icon-help"
+            aria-label="whole-avatar-cli-help"
+            aria-expanded={showBakeCliHelp}
+            onClick={() => setShowBakeCliHelp((current) => !current)}
+            title="콘솔 bake 도움말"
+          >
+            <HelpCircle size={18} />
+          </button>
         </div>
-        {bakeResult ? (
-          <div className="bake-result">
-            {bakeResult.report.placement.placementValidation ? (
-              <div className={`red-dot-summary ${bakeResult.report.placement.placementValidation.pass ? 'pass' : 'fail'}`}>
-                <strong>Red-dot placement validation</strong>
-                <span>pass={String(bakeResult.report.placement.placementValidation.pass)}</span>
-                <span>maxDx={bakeResult.report.placement.placementValidation.maxAbsDx}</span>
-                <span>maxDy={bakeResult.report.placement.placementValidation.maxAbsDy}</span>
-                <span>failed={(bakeResult.report.placement.placementValidation.frames ?? []).filter((frame) => !frame.pass).length}</span>
-              </div>
-            ) : null}
-            <div className="artifact-links">
-              <a href={bakeResult.files.psd} download={bakeResult.files.psdDownloadName ?? true}>완성 PSD 다운로드: {bakeResult.files.psdDownloadName ?? 'PSD'}</a>
-              <a href={bakeResult.files.report} target="_blank" rel="noreferrer">validation-report.json</a>
-              <a href={bakeResult.files.expectedSheet} target="_blank" rel="noreferrer">MeAegi source sheet</a>
-              {bakeResult.files.templateGuideSheet ? <a href={bakeResult.files.templateGuideSheet} target="_blank" rel="noreferrer">Template guide sheet</a> : null}
-              <a href={bakeResult.files.templateReferenceSheet} target="_blank" rel="noreferrer">Original template sheet</a>
-              <a href={bakeResult.files.convertedEditableSheet} target="_blank" rel="noreferrer">Converted PSD sheet</a>
-              <a href={bakeResult.files.diff} target="_blank" rel="noreferrer">source-vs-PSD diff</a>
-            </div>
-            {bakeResult.files.redDots ? (
-              <section className="red-dot-panel">
-                <h3>1px calibration dots</h3>
-                <p className="muted">Template 기준점은 빨간 1px, converted/source 결과 기준점은 초록 1px입니다. 흰 테두리/큰 점 없이 좌표만 비교합니다.</p>
-                <div className="artifact-links">
-                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">Template 빨간 1px 기준</a>
-                  <a href={bakeResult.files.redDots.sourceBakedSheet} target="_blank" rel="noreferrer">Source 초록 1px 결과</a>
-                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">Converted 초록 1px 결과</a>
-                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">빨강/초록 overlay</a>
-                  <a href={bakeResult.files.redDots.coordinates} target="_blank" rel="noreferrer">dot 좌표 JSON</a>
-                </div>
-                <div className="red-dot-previews">
-                  <a href={bakeResult.files.redDots.templateGuideSheet} target="_blank" rel="noreferrer">
-                    <span>Template 빨간 1px</span>
-                    <img src={bakeResult.files.redDots.templateGuideSheet} alt="template red 1px dot sheet" />
-                  </a>
-                  <a href={bakeResult.files.redDots.convertedSheet} target="_blank" rel="noreferrer">
-                    <span>Converted 초록 1px</span>
-                    <img src={bakeResult.files.redDots.convertedSheet} alt="converted green 1px dot sheet" />
-                  </a>
-                  <a href={bakeResult.files.redDots.overlaySheet} target="_blank" rel="noreferrer">
-                    <span>Overlay 빨강=template / 초록=converted</span>
-                    <img src={bakeResult.files.redDots.overlaySheet} alt="red template and green converted dot overlay sheet" />
-                  </a>
-                </div>
-                <div className="red-dot-upload">
-                  <label>
-                    수동 보정한 dot PNG/PSD 선택
-                    <input
-                      type="file"
-                      accept=".png,.psd,image/png"
-                      onChange={(event) => setAdjustedRedDotFile(event.target.files?.[0] ?? null)}
-                    />
-                  </label>
-                  <button disabled={!adjustedRedDotFile} onClick={compareAdjustedRedDots}>좌표 비교 + 보정 저장 + 재변환</button>
-                  <span aria-label="red-dot-measure-status">{redDotMeasureStatus}</span>
-                </div>
-                {redDotMeasureResult ? (
-                  <div className={`red-dot-summary ${redDotMeasureResult.pass ? 'pass' : 'fail'}`}>
-                    <strong>Manual red-dot measurement</strong>
-                    <span>pass={String(redDotMeasureResult.pass)}</span>
-                    <span>failed={redDotMeasureResult.failedFrames}</span>
-                    <span>missing={redDotMeasureResult.missingFrames}</span>
-                    <span>maxDx={redDotMeasureResult.maxAbsDx}</span>
-                    <span>maxDy={redDotMeasureResult.maxAbsDy}</span>
-                    {redDotMeasureResult.files?.report ? <a href={redDotMeasureResult.files.report} target="_blank" rel="noreferrer">measurement report</a> : null}
-                    <pre className="log">{redDotMeasureResult.frames.filter((frame) => !frame.pass).slice(0, 12).map((frame) => `${frame.key} delta=${JSON.stringify(frame.deltaActualMinusExpected)} apply=${JSON.stringify(frame.suggestedCorrectionToApplyToActual)}`).join('\n') || 'all red dots matched'}</pre>
-                  </div>
-                ) : null}
-              </section>
-            ) : null}
-            <div className="comparison-gifs">
-              {bakeResult.files.motionComparisonGifs.filter((artifact) => artifact.gif).slice(0, 8).map((artifact) => (
-                <a key={artifact.action} className="gif-card" href={artifact.gif ?? '#'} target="_blank" rel="noreferrer">
-                  <strong>{artifact.action}</strong>
-                  <small>{artifact.frameCount} frames · source-vs-PSD diff {artifact.sourceVsConvertedDiffPixels}</small>
-                  <img src={artifact.gif ?? ''} alt={`${artifact.action} comparison gif`} />
-                </a>
-              ))}
-            </div>
-            <p className="muted">{bakeResult.files.motionComparisonGifs.length}개 모션 비교 GIF 생성됨. 위에는 처음 8개만 표시합니다.</p>
+        {showBakeCliHelp ? (
+          <div className="help-card">
+            <strong>콘솔 bake 도움말</strong>
+            <p>UI에서는 파트별 mapped export만 사용합니다. 제거한 whole-avatar bake는 디버그/비교가 필요할 때 콘솔에서 실행합니다.</p>
+            <code>npm run bake:meaegi -- --share SHARE --target cape --parts hair,cap</code>
+            <small>예: <code>--target cap-c1 --parts face</code>, <code>--target cape --parts hair,cap</code>. 결과는 <code>artifacts/whole-avatar-bake/</code> 아래에 생성됩니다.</small>
           </div>
         ) : null}
+        <pre className="log" aria-label="import-log">{importLog.join('\n')}</pre>
       </section>
 
       {importedSource ? (
@@ -708,7 +537,6 @@ export function App() {
                 <select value={mapping.mode} onChange={(event) => update(part.id, { mode: event.target.value as MappingMode })} aria-label={`mode-${part.id}`}>
                   <option value="part">part</option>
                   <option value="group">group</option>
-                  <option value="whole-avatar">whole-avatar</option>
                 </select>
                 <input value={mapping.groupId} placeholder="예: cape-bundle" onChange={(event) => update(part.id, { groupId: event.target.value })} />
                 <button onClick={() => update(part.id, { confirmed: true })} className={mapping.confirmed ? 'confirmed' : ''}>{mapping.confirmed ? '확인됨' : '확인'}</button>
@@ -756,26 +584,26 @@ export function App() {
         <section className="panel preview-controls-panel">
           <h2><Eye size={18} /> Preview Zoom</h2>
           <div className="preview-controls">
-            <button onClick={() => setPreviewZoom((zoom) => Math.max(0.8, Number((zoom - 0.15).toFixed(2))))}>축소</button>
+            <button onClick={() => setPreviewZoom((zoom) => Math.max(previewZoomMin, Number((zoom - previewZoomButtonStep).toFixed(2))))}>축소</button>
             <input
               aria-label="preview-zoom"
               type="range"
-              min="0.8"
-              max="2"
-              step="0.05"
+              min={previewZoomMin}
+              max={previewZoomMax}
+              step={previewZoomStep}
               value={previewZoom}
+              onInput={(event) => setPreviewZoom(Number(event.currentTarget.value))}
               onChange={(event) => setPreviewZoom(Number(event.target.value))}
             />
-            <button onClick={() => setPreviewZoom((zoom) => Math.min(2, Number((zoom + 0.15).toFixed(2))))}>확대</button>
-            <button onClick={() => setPreviewZoom(1.15)}>기본</button>
+            <button onClick={() => setPreviewZoom((zoom) => Math.min(previewZoomMax, Number((zoom + previewZoomButtonStep).toFixed(2))))}>확대</button>
+            <button onClick={() => setPreviewZoom(previewZoomDefault)}>기본</button>
             <strong>{previewZoomPercent}%</strong>
           </div>
         </section>
       </section>
 
-      <section className="grid two" style={previewStyle}>
+      <section className="grid" style={previewStyle}>
         <FramePreview parts={parts} frames={frames} title="Source Animation Preview" />
-        <FramePreview parts={parts.filter((part) => mappings.some((mapping) => mapping.partId === part.id && mapping.confirmed))} frames={frames} title="Converted PSD Preview" />
       </section>
     </main>
   );

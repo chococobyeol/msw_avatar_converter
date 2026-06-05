@@ -115,6 +115,14 @@ test('writes rendered pixels into template editable layers', () => {
 
 import { buildEditableLayerSlots } from '../../packages/export/src/index.js';
 import { projectFramesToTargetGrid, runConversionPipeline } from '../../packages/conversion/src/index.js';
+import {
+  compactTransparentUploadGuard,
+  hasRawHairEffect,
+  isCompactBackSlotPath,
+  isFrontOnlyCompactSourceSelection,
+  resolveRawHairEffect,
+  shouldUseTransparentCompactBackSlotGuard,
+} from '../../scripts/bake-meaegi-whole-avatar.js';
 
 function projectionPlanForTarget(target: ReturnType<AgPsdTemplateReader['manifestToTargetPart']>, sourceAction = 'stand') {
   return {
@@ -186,6 +194,38 @@ test('editable layer slots reject frameGrid semantic mismatch', () => {
   const target = reader.manifestToTargetPart(reader.inventory('avatartemplate').find((m) => m.file.endsWith('Avatar_Hair.psd'))!);
   const frame = { action: 'wrong-action', frameIndex: 0, width: target.width, height: target.height, sourceFrameIds: [], rgbaBuffer: new Uint8ClampedArray(target.width * target.height * 4) };
   assert.throws(() => buildEditableLayerSlots(target, [frame]), /Missing rendered frame/);
+});
+
+test('front-only face compact cap bakes guard back slots without copying face pixels', () => {
+  assert.equal(isFrontOnlyCompactSourceSelection(['face']), true);
+  assert.equal(isFrontOnlyCompactSourceSelection(['face', 'eyeDeco']), true);
+  assert.equal(isFrontOnlyCompactSourceSelection(['face', 'cap']), false);
+  assert.equal(isCompactBackSlotPath('case2.back/edithere:cap_backCap_92'), true);
+  assert.equal(shouldUseTransparentCompactBackSlotGuard(['face'], 'case2.back/edithere:cap_backCap_92'), true);
+  assert.equal(shouldUseTransparentCompactBackSlotGuard(['face'], 'case1.front/edithere:cap_cap_34'), false);
+  assert.equal(shouldUseTransparentCompactBackSlotGuard(['cap'], 'case2.back/edithere:cap_backCap_92'), false);
+
+  const guard = compactTransparentUploadGuard(4, 3);
+  const alphaPixels = Array.from({ length: guard.length / 4 }, (_, pixel) => guard[pixel * 4 + 3]).filter((alpha) => alpha > 0);
+  assert.deepEqual(alphaPixels, [1]);
+  assert.deepEqual(Array.from(guard.slice(0, 4)), [0, 0, 0, 1]);
+});
+
+test('raw hair zmap lookup tolerates template slots missing from item data', () => {
+  const rawHair = {
+    id: 61860,
+    frameBooks: {
+      stand1: { frames: [{ effects: { hair: { image: 'unused' } } }] },
+      backDefault: { frames: [] },
+      rope: { frames: [{ effects: { backHairBelowCap: { image: 'rope-back', origin: { x: 31, y: 18, isEmpty: false } } } }] },
+    },
+  };
+  assert.equal(hasRawHairEffect(rawHair, 'stand1', 0, 'hair'), true);
+  assert.equal(hasRawHairEffect(rawHair, 'backDefault', 0, 'backHairBelowCap'), false);
+  const resolved = resolveRawHairEffect(rawHair, 'backDefault', 0, 'backHairBelowCap');
+  assert.equal(resolved.frameBook, 'rope');
+  assert.equal(resolved.frameIndex, 0);
+  assert.equal(resolved.effect?.image, 'rope-back');
 });
 
 test('export rejects missing frameGrid frames and sanitizes action filenames', () => {
